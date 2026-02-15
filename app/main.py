@@ -2,9 +2,7 @@
 import logging
 from fastapi import FastAPI
 from app.models.schemas import HealthResponse
-from app.db.base import Base, engine
 from app.config import settings
-from app.db import models  # Import models to register them with Base
 from app.api.router import api_router
 
 logger = logging.getLogger(__name__)
@@ -17,17 +15,6 @@ app = FastAPI(
 
 # Include API routers
 app.include_router(api_router, prefix="/api")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Create database tables on startup."""
-    try:
-        Base.metadata.create_all(bind=engine)
-        logger.info("Database tables created successfully")
-    except Exception as e:
-        logger.error(f"Error creating database tables: {e}")
-        # Don't raise - allow app to start even if DB is not ready
 
 
 @app.get("/")
