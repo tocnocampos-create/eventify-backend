@@ -1,5 +1,5 @@
 """Pydantic schemas for request/response models."""
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from typing import Optional, List, Dict
 from datetime import datetime, time
 
@@ -183,6 +183,7 @@ class UserResponse(UserBase):
     id: int
     role: str
     is_active: bool
+    has_interests: bool = False
     created_at: datetime
 
     class Config:
@@ -220,3 +221,148 @@ class SearchResponse(BaseModel):
     venues: List[Venue]
     events: List[Event]
     meta: SearchMeta
+
+
+# Review Schemas
+class ReviewBase(BaseModel):
+    """Base review schema."""
+    rating: int = Field(..., ge=1, le=5)
+    comment: Optional[str] = None
+
+
+class ReviewCreate(ReviewBase):
+    """Schema for creating a review."""
+    venue_id: Optional[int] = None
+    event_id: Optional[int] = None
+
+    @model_validator(mode="after")
+    def check_venue_or_event(self):
+        if bool(self.venue_id) == bool(self.event_id):
+            raise ValueError("Exactly one of venue_id or event_id must be set")
+        return self
+
+
+class ReviewUpdate(BaseModel):
+    """Schema for updating a review."""
+    rating: Optional[int] = Field(None, ge=1, le=5)
+    comment: Optional[str] = None
+
+
+class Review(ReviewBase):
+    """Review response schema."""
+    id: int
+    user_id: int
+    venue_id: Optional[int] = None
+    event_id: Optional[int] = None
+    user_name: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# EventProduct Schemas
+class EventProductBase(BaseModel):
+    """Base event product schema."""
+    title: str = Field(..., max_length=255)
+    price: Optional[str] = Field(None, max_length=50)
+    image_url: Optional[str] = Field(None, max_length=500)
+    purchase_url: Optional[str] = Field(None, max_length=500)
+
+
+class EventProductCreate(EventProductBase):
+    """Schema for creating an event product."""
+    event_id: int
+
+
+class EventProductResponse(EventProductBase):
+    """Event product response schema."""
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# EventCommunityLink Schemas
+class EventCommunityLinkBase(BaseModel):
+    """Base event community link schema."""
+    platform: str = Field(..., max_length=100)
+    url: str = Field(..., max_length=500)
+
+
+class EventCommunityLinkCreate(EventCommunityLinkBase):
+    """Schema for creating an event community link."""
+    event_id: int
+
+
+class EventCommunityLinkResponse(EventCommunityLinkBase):
+    """Event community link response schema."""
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Detail Schemas
+class VenueDetail(BaseModel):
+    """Venue detail response with events and reviews."""
+    venue: Venue
+    upcoming_events: List[Event]
+    past_events: List[Event]
+    reviews: List[Review]
+    average_rating: Optional[float] = None
+    review_count: int
+
+
+class EventDetail(BaseModel):
+    """Event detail response with venue and reviews."""
+    event: Event
+    venue: Optional[Venue] = None
+    reviews: List[Review]
+    average_rating: Optional[float] = None
+    review_count: int
+    products: List[EventProductResponse] = []
+    community_links: List[EventCommunityLinkResponse] = []
+
+
+# User Preferences Schemas
+class InterestItem(BaseModel):
+    """Single interest input."""
+    category: str = Field(..., max_length=100)
+    subtype: Optional[str] = Field(None, max_length=100)
+
+
+class UserInterestResponse(BaseModel):
+    """Single interest output."""
+    id: int
+    category: str
+    subtype: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class UserInterestsUpdate(BaseModel):
+    """Bulk replace interests."""
+    interests: List[InterestItem]
+
+
+class FollowVenueResponse(BaseModel):
+    """Follow/unfollow confirmation."""
+    venue_id: int
+    following: bool
+
+
+class SavedEventResponse(BaseModel):
+    """Save/unsave confirmation."""
+    event_id: int
+    saved: bool
+
+
+class NotificationFeed(BaseModel):
+    """Aggregated notification feed."""
+    followed_venue_events: Dict[str, List[Event]]
+    saved_events: List[Event]
+    recommended_events: List[Event]

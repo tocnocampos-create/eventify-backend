@@ -5,7 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.config import settings
 from app.db.base import Base
-from app.db.models import Neighborhood, Venue, Event, User  # noqa: F401 — register models with Base.metadata
+from app.db.models import Neighborhood, Venue, Event, EventProduct, EventCommunityLink, User, Review  # noqa: F401 — register models with Base.metadata
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

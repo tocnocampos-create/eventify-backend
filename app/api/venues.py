@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.db.base import get_db
 from app.db.models import User
-from app.models.schemas import Venue, VenueCreate, VenueUpdate
+from app.models.schemas import Venue, VenueCreate, VenueUpdate, VenueDetail
 from app.services.venue_service import VenueService
 from app.api.dependencies import get_current_user, get_admin_user
 
@@ -24,6 +24,22 @@ async def get_venues(
         db, skip=skip, limit=limit, neighborhood_id=neighborhood_id
     )
     return venues
+
+
+@router.get("/{venue_id}/detail", response_model=VenueDetail, status_code=status.HTTP_200_OK)
+async def get_venue_detail(
+    venue_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get venue detail with events and reviews."""
+    result = VenueService.get_venue_detail(db, venue_id)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Venue with id {venue_id} not found"
+        )
+    return result
 
 
 @router.get("/{venue_id}", response_model=Venue, status_code=status.HTTP_200_OK)

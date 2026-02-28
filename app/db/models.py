@@ -1,7 +1,7 @@
 """SQLAlchemy database models."""
 import enum
 
-from sqlalchemy import Boolean, Column, Enum, Integer, String, Float, Text, ForeignKey, Time, ARRAY, DateTime
+from sqlalchemy import Boolean, Column, Enum, Integer, String, Float, Text, ForeignKey, Time, ARRAY, DateTime, CheckConstraint, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -23,6 +23,12 @@ class User(Base):
     role = Column(Enum(UserRole), default=UserRole.USER, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    reviews = relationship("Review", back_populates="user", cascade="all, delete-orphan")
+    followed_venues = relationship("UserVenueFollow", back_populates="user", cascade="all, delete-orphan")
+    saved_events = relationship("UserSavedEvent", back_populates="user", cascade="all, delete-orphan")
+    interests = relationship("UserInterest", back_populates="user", cascade="all, delete-orphan")
 
 
 class Neighborhood(Base):
@@ -69,6 +75,8 @@ class Venue(Base):
     # Relationships
     neighborhood = relationship("Neighborhood", back_populates="venues")
     events = relationship("Event", back_populates="venue", cascade="all, delete-orphan")
+    reviews = relationship("Review", back_populates="venue", cascade="all, delete-orphan")
+    followers = relationship("UserVenueFollow", back_populates="venue", cascade="all, delete-orphan")
 
 
 class Event(Base):
@@ -92,4 +100,114 @@ class Event(Base):
     
     # Relationships
     venue = relationship("Venue", back_populates="events")
+    reviews = relationship("Review", back_populates="event", cascade="all, delete-orphan")
+    products = relationship("EventProduct", back_populates="event", cascade="all, delete-orphan")
+    community_links = relationship("EventCommunityLink", back_populates="event", cascade="all, delete-orphan")
+    saved_by = relationship("UserSavedEvent", back_populates="event", cascade="all, delete-orphan")
+
+
+class EventProduct(Base):
+    """Product associated with an event (merch, vinyl, etc.)."""
+    __tablename__ = "event_products"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    price = Column(String(50), nullable=True)
+    image_url = Column(String(500), nullable=True)
+    purchase_url = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    event = relationship("Event", back_populates="products")
+
+
+class EventCommunityLink(Base):
+    """Community/social link associated with an event."""
+    __tablename__ = "event_community_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True)
+    platform = Column(String(100), nullable=False)
+    url = Column(String(500), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    event = relationship("Event", back_populates="community_links")
+
+
+class Review(Base):
+    """Review database model."""
+    __tablename__ = "reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "(venue_id IS NOT NULL AND event_id IS NULL) OR (venue_id IS NULL AND event_id IS NOT NULL)",
+            name="ck_review_venue_or_event"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    venue_id = Column(Integer, ForeignKey("venues.id"), nullable=True, index=True)
+    event_id = Column(Integer, ForeignKey("events.id"), nullable=True, index=True)
+    rating = Column(Integer, nullable=False)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="reviews")
+    venue = relationship("Venue", back_populates="reviews")
+    event = relationship("Event", back_populates="reviews")
+
+
+class UserVenueFollow(Base):
+    """Tracks which venues a user follows."""
+    __tablename__ = "user_venue_follows"
+    __table_args__ = (
+        UniqueConstraint("user_id", "venue_id", name="uq_user_venue_follow"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    venue_id = Column(Integer, ForeignKey("venues.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="followed_venues")
+    venue = relationship("Venue", back_populates="followers")
+
+
+class UserSavedEvent(Base):
+    """Tracks which events a user has saved."""
+    __tablename__ = "user_saved_events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "event_id", name="uq_user_saved_event"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_id = Column(Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="saved_events")
+    event = relationship("Event", back_populates="saved_by")
+
+
+class UserInterest(Base):
+    """User interest categories and optional subtypes."""
+    __tablename__ = "user_interests"
+    __table_args__ = (
+        UniqueConstraint("user_id", "category", "subtype", name="uq_user_interest"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    category = Column(String(100), nullable=False)
+    subtype = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="interests")
 

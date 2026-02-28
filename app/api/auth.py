@@ -14,6 +14,7 @@ from app.models.schemas import (
     UserResponse,
 )
 from app.services.user_service import UserService
+from app.services.user_preferences_service import UserPreferencesService
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -86,6 +87,18 @@ async def refresh(refresh_data: RefreshRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Get current user profile."""
-    return current_user
+    has_interests = UserPreferencesService.has_interests(db, current_user.id)
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        role=current_user.role.value if hasattr(current_user.role, 'value') else current_user.role,
+        is_active=current_user.is_active,
+        has_interests=has_interests,
+        created_at=current_user.created_at,
+    )

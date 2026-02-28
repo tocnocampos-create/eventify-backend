@@ -13,6 +13,7 @@ router = APIRouter(prefix="/search", tags=["search"])
 
 @router.get("", response_model=SearchResponse, status_code=status.HTTP_200_OK)
 async def search(
+    q: Optional[str] = Query(None, min_length=1, max_length=200, description="Text search across event names, descriptions, keywords, and venue names"),
     venue_type: Optional[str] = Query(None, description="Filter by venue type (e.g., 'Bar', 'Club')"),
     event_type: Optional[str] = Query(None, description="Filter by event type (e.g., 'Música', 'Teatro')"),
     event_category: Optional[str] = Query(None, description="Filter by event category (e.g., 'Pop', 'Rock')"),
@@ -101,14 +102,15 @@ async def search(
         )
     
     # Validate that at least one filter is provided
-    if not any([venue_type, event_type, event_category, start_date, min_lat]):
+    if not any([q, venue_type, event_type, event_category, start_date, min_lat]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one filter must be provided: venue_type, event_type, event_category, start_date, or coordinate bounds"
+            detail="At least one filter must be provided: q, venue_type, event_type, event_category, start_date, or coordinate bounds"
         )
     
     # Create SearchFilters object
     filters = SearchFilters(
+        q=q,
         venue_type=venue_type,
         event_type=event_type,
         event_category=event_category,

@@ -1,16 +1,35 @@
 """FastAPI application entry point."""
 import logging
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.models.schemas import HealthResponse
 from app.config import settings
 from app.api.router import api_router
 
 logger = logging.getLogger(__name__)
 
+
+class HeartbeatFilter(logging.Filter):
+    """Suppress access log entries for heartbeat endpoint."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/heartbeat" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(HeartbeatFilter())
+
 app = FastAPI(
     title=settings.APP_NAME,
     description="Eventify Backend API - Events Microservice",
     version=settings.APP_VERSION
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Include API routers
@@ -21,6 +40,12 @@ app.include_router(api_router, prefix="/api")
 async def root():
     """Root endpoint."""
     return {"message": "Welcome to Eventify API"}
+
+
+@app.get("/api/v2/heartbeat")
+async def heartbeat():
+    """Lightweight heartbeat for dev tooling."""
+    return {"status": "ok"}
 
 
 @app.get("/health", response_model=HealthResponse)

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.db.base import get_db
 from app.db.models import User
-from app.models.schemas import Event, EventCreate, EventUpdate
+from app.models.schemas import Event, EventCreate, EventUpdate, EventDetail
 from app.services.event_service import EventService
 from app.api.dependencies import get_current_user, get_admin_user
 
@@ -25,6 +25,22 @@ async def get_events(
         db, skip=skip, limit=limit, venue_id=venue_id, category=category
     )
     return events
+
+
+@router.get("/{event_id}/detail", response_model=EventDetail, status_code=status.HTTP_200_OK)
+async def get_event_detail(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get event detail with venue and reviews."""
+    result = EventService.get_event_detail(db, event_id)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Event with id {event_id} not found"
+        )
+    return result
 
 
 @router.get("/{event_id}", response_model=Event, status_code=status.HTTP_200_OK)
