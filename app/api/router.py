@@ -1,10 +1,11 @@
 """Main API router that includes all endpoint routers."""
 from fastapi import APIRouter
-from app.api import auth, neighborhoods, venues, events, search, reviews, user_preferences
+from app.api import auth, config, neighborhoods, venues, events, search, reviews, user_preferences
 
 api_router = APIRouter()
 
 api_router.include_router(auth.router)
+api_router.include_router(config.router)
 api_router.include_router(neighborhoods.router)
 api_router.include_router(venues.router)
 api_router.include_router(events.router)
