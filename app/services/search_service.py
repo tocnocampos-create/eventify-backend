@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Any
+from sqlalchemy import or_, func
 from sqlalchemy.orm import Session, Query
 from app.db.models import Venue, Event
 from app.services.coordinate_filter import filter_by_coordinate_bounds
@@ -21,6 +22,7 @@ class ReturnType(str, Enum):
 @dataclass
 class SearchFilters:
     """Data class for search filter parameters."""
+    q: Optional[str] = None
     venue_type: Optional[str] = None
     event_type: Optional[str] = None
     event_category: Optional[str] = None
@@ -36,11 +38,11 @@ class SearchFilters:
     
     def has_event_filters(self) -> bool:
         """Check if any event filters are applied."""
-        return any([self.event_type, self.event_category, self.start_date])
-    
+        return any([self.q, self.event_type, self.event_category, self.start_date])
+
     def has_venue_filters(self) -> bool:
         """Check if any venue filters are applied."""
-        return self.venue_type is not None
+        return any([self.q, self.venue_type])
     
     def has_coordinate_bounds(self) -> bool:
         """Check if coordinate bounds are provided."""
@@ -107,6 +109,7 @@ class SearchService:
                 "total_venues": len(venues),
                 "total_events": len(events),
                 "filters_applied": {
+                    "q": filters.q,
                     "venue_type": filters.venue_type,
                     "event_type": filters.event_type,
                     "event_category": filters.event_category,
@@ -142,14 +145,24 @@ class SearchService:
         Returns:
             Query with event filters applied
         """
+        if filters.q is not None:
+            pattern = f"%{filters.q}%"
+            event_query = event_query.filter(
+                or_(
+                    Event.name.ilike(pattern),
+                    Event.description.ilike(pattern),
+                    func.array_to_string(Event.keywords, ' ').ilike(pattern),
+                )
+            )
+
         if filters.event_type is not None:
             event_query = event_query.filter(Event.type == filters.event_type)
-        
+
         if filters.event_category is not None:
             event_query = event_query.filter(Event.category == filters.event_category)
-        
+
         event_query = self._apply_date_filter(event_query, filters)
-        
+
         return event_query
 
     def _apply_date_filter(self, event_query: Query, filters: SearchFilters) -> Query:
@@ -186,26 +199,50 @@ class SearchService:
     ) -> Query:
         """
         Build venue query based on filters and matching events.
-        
+
+        When a text query (q) is used with event filters, venues are found via
+        OR logic: venue name matches q OR venue has matching events. This ensures
+        searching "Bad Bunny" returns events at "Movistar Arena" (event name match)
+        AND any venue literally named "Bad Bunny" (venue name match).
+
         Args:
             filters: SearchFilters object
             event_query: Event query with filters applied
             has_event_filters: Whether event filters were applied
-            
+
         Returns:
             SQLAlchemy query for venues with filters applied
         """
         venue_query = self.db.query(Venue)
-        
-        # If event filters are applied, restrict venues to those with matching events
-        if has_event_filters:
-            venue_query = self._restrict_venues_to_matching_events(
-                venue_query, event_query
-            )
-        
-        # Apply venue-specific filters
-        venue_query = self._apply_venue_filters(venue_query, filters)
-        
+
+        if has_event_filters and filters.q is not None:
+            # OR logic: venues with matching events OR venue name matches q
+            matching_events = event_query.all()
+            venue_ids = self._extract_venue_ids_from_events(matching_events)
+
+            conditions = [Venue.name.ilike(f"%{filters.q}%")]
+            if venue_ids:
+                conditions.append(Venue.id.in_(venue_ids))
+
+            venue_query = venue_query.filter(or_(*conditions))
+
+            # Apply remaining venue filters (venue_type, coordinates) but NOT q again
+            if filters.venue_type is not None:
+                venue_query = venue_query.filter(Venue.venue_type == filters.venue_type)
+            if filters.has_coordinate_bounds():
+                venue_query = filter_by_coordinate_bounds(
+                    venue_query, "venues",
+                    filters.min_lat, filters.max_lat,
+                    filters.min_lon, filters.max_lon
+                )
+        else:
+            # No text query: use original AND logic
+            if has_event_filters:
+                venue_query = self._restrict_venues_to_matching_events(
+                    venue_query, event_query
+                )
+            venue_query = self._apply_venue_filters(venue_query, filters)
+
         return venue_query
 
     def _restrict_venues_to_matching_events(
@@ -263,9 +300,12 @@ class SearchService:
         Returns:
             Query with venue filters applied
         """
+        if filters.q is not None:
+            venue_query = venue_query.filter(Venue.name.ilike(f"%{filters.q}%"))
+
         if filters.venue_type is not None:
             venue_query = venue_query.filter(Venue.venue_type == filters.venue_type)
-        
+
         # Apply coordinate bounds if provided
         if filters.has_coordinate_bounds():
             venue_query = filter_by_coordinate_bounds(

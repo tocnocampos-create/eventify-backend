@@ -1,7 +1,8 @@
 """Event service layer."""
 from typing import List, Optional
-from sqlalchemy.orm import Session
-from app.db.models import Event
+from sqlalchemy import func as sa_func
+from sqlalchemy.orm import Session, joinedload
+from app.db.models import Event, EventProduct, EventCommunityLink, Review, Venue
 from app.models.schemas import EventCreate, EventUpdate
 
 
@@ -74,11 +75,74 @@ class EventService:
     def delete_event(db: Session, event_id: int) -> bool:
         """Delete an event."""
         db_event = db.query(Event).filter(Event.id == event_id).first()
-        
+
         if not db_event:
             return False
-        
+
         db.delete(db_event)
         db.commit()
         return True
+
+    @staticmethod
+    def get_event_detail(db: Session, event_id: int) -> Optional[dict]:
+        """Get event with venue and reviews aggregated."""
+        event = db.query(Event).filter(Event.id == event_id).first()
+        if not event:
+            return None
+
+        venue = None
+        if event.venue_id:
+            venue = db.query(Venue).filter(Venue.id == event.venue_id).first()
+
+        reviews = (
+            db.query(Review)
+            .options(joinedload(Review.user))
+            .filter(Review.event_id == event_id)
+            .order_by(Review.created_at.desc())
+            .all()
+        )
+
+        avg_result = (
+            db.query(sa_func.avg(Review.rating))
+            .filter(Review.event_id == event_id)
+            .scalar()
+        )
+
+        review_dicts = [
+            {
+                "id": r.id,
+                "user_id": r.user_id,
+                "venue_id": r.venue_id,
+                "event_id": r.event_id,
+                "rating": r.rating,
+                "comment": r.comment,
+                "user_name": r.user.full_name if r.user else None,
+                "created_at": r.created_at,
+            }
+            for r in reviews
+        ]
+
+        products = (
+            db.query(EventProduct)
+            .filter(EventProduct.event_id == event_id)
+            .order_by(EventProduct.created_at)
+            .all()
+        )
+
+        community_links = (
+            db.query(EventCommunityLink)
+            .filter(EventCommunityLink.event_id == event_id)
+            .order_by(EventCommunityLink.created_at)
+            .all()
+        )
+
+        return {
+            "event": event,
+            "venue": venue,
+            "reviews": review_dicts,
+            "average_rating": round(float(avg_result), 2) if avg_result else None,
+            "review_count": len(reviews),
+            "products": products,
+            "community_links": community_links,
+        }
 

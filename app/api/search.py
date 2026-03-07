@@ -3,14 +3,17 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.db.base import get_db
+from app.db.models import User
 from app.models.schemas import SearchResponse
 from app.services.search_service import SearchService, SearchFilters, ReturnType
+from app.api.dependencies import get_current_user
 
 router = APIRouter(prefix="/search", tags=["search"])
 
 
 @router.get("", response_model=SearchResponse, status_code=status.HTTP_200_OK)
 async def search(
+    q: Optional[str] = Query(None, min_length=1, max_length=200, description="Text search across event names, descriptions, keywords, and venue names"),
     venue_type: Optional[str] = Query(None, description="Filter by venue type (e.g., 'Bar', 'Club')"),
     event_type: Optional[str] = Query(None, description="Filter by event type (e.g., 'Música', 'Teatro')"),
     event_category: Optional[str] = Query(None, description="Filter by event category (e.g., 'Pop', 'Rock')"),
@@ -23,7 +26,8 @@ async def search(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return per entity type"),
     return_type: ReturnType = Query(ReturnType.BOTH, description="What to return: 'both', 'events', or 'venues'"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> SearchResponse:
     """
     Search venues and events by various filters.
@@ -98,14 +102,15 @@ async def search(
         )
     
     # Validate that at least one filter is provided
-    if not any([venue_type, event_type, event_category, start_date, min_lat]):
+    if not any([q, venue_type, event_type, event_category, start_date, min_lat]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one filter must be provided: venue_type, event_type, event_category, start_date, or coordinate bounds"
+            detail="At least one filter must be provided: q, venue_type, event_type, event_category, start_date, or coordinate bounds"
         )
     
     # Create SearchFilters object
     filters = SearchFilters(
+        q=q,
         venue_type=venue_type,
         event_type=event_type,
         event_category=event_category,

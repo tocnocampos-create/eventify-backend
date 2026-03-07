@@ -1,7 +1,9 @@
 """Venue service layer."""
+from datetime import date
 from typing import List, Optional
-from sqlalchemy.orm import Session
-from app.db.models import Venue
+from sqlalchemy import func as sa_func
+from sqlalchemy.orm import Session, joinedload
+from app.db.models import Venue, Event, Review
 from app.models.schemas import VenueCreate, VenueUpdate
 
 
@@ -82,4 +84,53 @@ class VenueService:
         """Get all types of venues."""
         results = db.query(Venue.venue_type).filter(Venue.neighborhood_id == neighborhood_id).distinct().all()
         return [row[0] for row in results if row[0] is not None]
+
+    @staticmethod
+    def get_venue_detail(db: Session, venue_id: int) -> Optional[dict]:
+        """Get venue with events and reviews aggregated."""
+        venue = db.query(Venue).filter(Venue.id == venue_id).first()
+        if not venue:
+            return None
+
+        today = date.today().isoformat()
+        events = db.query(Event).filter(Event.venue_id == venue_id).all()
+        upcoming = [e for e in events if e.date >= today]
+        past = [e for e in events if e.date < today]
+
+        reviews = (
+            db.query(Review)
+            .options(joinedload(Review.user))
+            .filter(Review.venue_id == venue_id)
+            .order_by(Review.created_at.desc())
+            .all()
+        )
+
+        avg_result = (
+            db.query(sa_func.avg(Review.rating))
+            .filter(Review.venue_id == venue_id)
+            .scalar()
+        )
+
+        review_dicts = [
+            {
+                "id": r.id,
+                "user_id": r.user_id,
+                "venue_id": r.venue_id,
+                "event_id": r.event_id,
+                "rating": r.rating,
+                "comment": r.comment,
+                "user_name": r.user.full_name if r.user else None,
+                "created_at": r.created_at,
+            }
+            for r in reviews
+        ]
+
+        return {
+            "venue": venue,
+            "upcoming_events": upcoming,
+            "past_events": past,
+            "reviews": review_dicts,
+            "average_rating": round(float(avg_result), 2) if avg_result else None,
+            "review_count": len(reviews),
+        }
 

@@ -1,13 +1,22 @@
 """FastAPI application entry point."""
 import logging
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.models.schemas import HealthResponse
-from app.db.base import Base, engine
 from app.config import settings
-from app.db import models  # Import models to register them with Base
 from app.api.router import api_router
 
 logger = logging.getLogger(__name__)
+
+
+class HeartbeatFilter(logging.Filter):
+    """Suppress access log entries for heartbeat endpoint."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/heartbeat" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(HeartbeatFilter())
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -15,25 +24,28 @@ app = FastAPI(
     version=settings.APP_VERSION
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Include API routers
 app.include_router(api_router, prefix="/api")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Create database tables on startup."""
-    try:
-        Base.metadata.create_all(bind=engine)
-        logger.info("Database tables created successfully")
-    except Exception as e:
-        logger.error(f"Error creating database tables: {e}")
-        # Don't raise - allow app to start even if DB is not ready
 
 
 @app.get("/")
 async def root():
     """Root endpoint."""
     return {"message": "Welcome to Eventify API"}
+
+
+@app.get("/api/v2/heartbeat")
+async def heartbeat():
+    """Lightweight heartbeat for dev tooling."""
+    return {"status": "ok"}
 
 
 @app.get("/health", response_model=HealthResponse)
