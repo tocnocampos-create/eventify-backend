@@ -366,3 +366,31 @@ class NotificationFeed(BaseModel):
     followed_venue_events: Dict[str, List[Event]]
     saved_events: List[Event]
     recommended_events: List[Event]
+
+
+# Discover Feed Schemas
+class EventWithVenue(Event):
+    """Event with inline venue data."""
+    venue: Optional[Venue] = None
+
+
+class NearbyVenueItem(BaseModel):
+    """Venue with distance from user."""
+    venue: Venue
+    distance_km: Optional[float] = None
+
+
+class PopularCategoryItem(BaseModel):
+    """Category with event count."""
+    category: str
+    event_count: int
+
+
+class DiscoverResponse(BaseModel):
+    """Discover feed response with all sections."""
+    trending: List[EventWithVenue]
+    today: List[EventWithVenue]
+    this_week: List[EventWithVenue]
+    nearby_venues: List[NearbyVenueItem]
+    popular_categories: List[PopularCategoryItem]
+    for_you: Optional[List[EventWithVenue]] = None
