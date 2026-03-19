@@ -1,12 +1,12 @@
 """Review API endpoints."""
-from typing import Optional
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.db.base import get_db
 from app.db.models import User
 from app.models import schemas
 from app.services.review_service import ReviewService
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, get_optional_current_user
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 
@@ -25,14 +25,14 @@ def _review_to_response(review) -> dict:
     }
 
 
-@router.get("", response_model=list[schemas.Review], status_code=status.HTTP_200_OK)
+@router.get("", response_model=List[schemas.Review], status_code=status.HTTP_200_OK)
 async def get_reviews(
     venue_id: Optional[int] = Query(None, description="Filter by venue ID"),
     event_id: Optional[int] = Query(None, description="Filter by event ID"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """Get reviews for a venue or event."""
     if venue_id and event_id:

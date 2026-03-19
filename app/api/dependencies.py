@@ -1,4 +1,5 @@
 """FastAPI authentication dependencies."""
+from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
@@ -14,7 +15,7 @@ optional_security = HTTPBearer(auto_error=False)
 def get_optional_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(optional_security),
     db: Session = Depends(get_db),
-) -> User | None:
+) -> Optional[User]:
     """Return authenticated user or None — never raises 401."""
     if credentials is None:
         return None

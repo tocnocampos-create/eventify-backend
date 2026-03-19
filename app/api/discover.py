@@ -1,4 +1,5 @@
 """Discover feed endpoint — curated content for the discovery screen."""
+from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -23,12 +24,12 @@ def _event_with_venue(event) -> dict:
 
 @router.get("", response_model=DiscoverResponse)
 def get_discover_feed(
-    lat: float | None = Query(None, description="User latitude"),
-    lon: float | None = Query(None, description="User longitude"),
+    lat: Optional[float] = Query(None, description="User latitude"),
+    lon: Optional[float] = Query(None, description="User longitude"),
     city: str = Query("Santiago", max_length=100),
     radius_km: float = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_optional_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     user_id = current_user.id if current_user else None
     feed = DiscoverService.get_discover_feed(

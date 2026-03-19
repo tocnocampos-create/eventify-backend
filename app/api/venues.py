@@ -6,7 +6,7 @@ from app.db.base import get_db
 from app.db.models import User
 from app.models.schemas import Venue, VenueCreate, VenueUpdate, VenueDetail
 from app.services.venue_service import VenueService
-from app.api.dependencies import get_current_user, get_admin_user
+from app.api.dependencies import get_current_user, get_admin_user, get_optional_current_user
 
 router = APIRouter(prefix="/venues", tags=["venues"])
 
@@ -17,7 +17,7 @@ async def get_venues(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
     neighborhood_id: Optional[int] = Query(None, description="Filter by neighborhood ID"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """Get all venues with optional filtering by neighborhood."""
     venues = VenueService.get_venues(
@@ -30,7 +30,7 @@ async def get_venues(
 async def get_venue_detail(
     venue_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """Get venue detail with events and reviews."""
     result = VenueService.get_venue_detail(db, venue_id)
@@ -46,7 +46,7 @@ async def get_venue_detail(
 async def get_venue(
     venue_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """Get a venue by ID."""
     venue = VenueService.get_venue(db, venue_id)
