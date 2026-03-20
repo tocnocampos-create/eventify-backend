@@ -1,11 +1,35 @@
 """Search service for filtering venues and events."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from sqlalchemy import or_, func
+from sqlalchemy import cast, or_, func, String
+from sqlalchemy.dialects.postgresql import ARRAY as PgARRAY
 from sqlalchemy.orm import Session, Query
 from app.db.models import Venue, Event
 from app.services.coordinate_filter import filter_by_coordinate_bounds
+
+# Maps SearchScreen pill keys → keywords stored in the events.keywords array.
+# Used to filter events server-side when keyword_category is provided.
+PILL_KEYWORD_MAP: Dict[str, List[str]] = {
+    "Nacional":       ["folclore", "folklore", "cueca", "música nacional",
+                       "banda chilena", "artista chileno", "cumbia chilena", "latin folk"],
+    "Vida Nocturna":  ["vida nocturna", "DJ", "club", "boliche", "after", "nocturno"],
+    "Al aire libre":  ["aire libre", "outdoor", "parque", "festival", "anfiteatro"],
+    "Festivales":     ["festival", "aire libre", "outdoor", "anfiteatro"],
+    "Barrios":        ["barrio italia", "lastarria", "bellavista", "brasil", "yungay",
+                       "patrimonio", "ruta cultural"],
+    "City Tour":      ["city tour", "tour", "turismo", "visita guiada",
+                       "centro histórico", "ruta patrimonial", "la moneda"],
+    "Familiar":       ["familiar", "infantil", "niños", "kids", "todas las edades"],
+    "Sunsets":        ["sunset", "atardecer", "happy hour", "rooftop", "terraza"],
+    "Ferias":         ["feria", "mercado", "bazar", "food market"],
+    "Jazz":           ["jazz", "blues", "swing"],
+    "Comedia":        ["comedia", "stand up", "humor"],
+    "Teatro":         ["teatro", "obra", "drama", "tragicomedia", "monólogo"],
+    "Cine":           ["cine", "película", "film", "proyección"],
+    "Museos":         ["museo", "colección"],
+    "Galerías":       ["galería", "arte", "exposición"],
+}
 
 
 # Constants
@@ -26,6 +50,7 @@ class SearchFilters:
     venue_type: Optional[str] = None
     event_type: Optional[str] = None
     event_category: Optional[str] = None
+    keyword_category: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     min_lat: Optional[float] = None
@@ -35,10 +60,11 @@ class SearchFilters:
     skip: int = 0
     limit: int = 100
     return_type: ReturnType = ReturnType.BOTH
-    
+
     def has_event_filters(self) -> bool:
         """Check if any event filters are applied."""
-        return any([self.q, self.event_type, self.event_category, self.start_date])
+        return any([self.q, self.event_type, self.event_category,
+                    self.keyword_category, self.start_date])
 
     def has_venue_filters(self) -> bool:
         """Check if any venue filters are applied."""
@@ -160,6 +186,14 @@ class SearchService:
 
         if filters.event_category is not None:
             event_query = event_query.filter(Event.category == filters.event_category)
+
+        if filters.keyword_category is not None:
+            kw_list = PILL_KEYWORD_MAP.get(filters.keyword_category)
+            if kw_list:
+                # PostgreSQL && (array overlap): any element in kw_list appears in event.keywords
+                event_query = event_query.filter(
+                    Event.keywords.op('&&')(cast(kw_list, PgARRAY(String)))
+                )
 
         event_query = self._apply_date_filter(event_query, filters)
 

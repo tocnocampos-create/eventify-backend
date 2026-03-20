@@ -64,7 +64,7 @@ CONFIG = {
         {"key": "Nacional", "image_url": None},
         {"key": "Teatro", "image_url": None},
         {"key": "Vida Nocturna", "image_url": None},
-        {"key": "Galerías ", "image_url": None},
+        {"key": "Galerías", "image_url": None},
         {"key": "Barrios", "image_url": None},
         {"key": "Festivales", "image_url": None},
         {"key": "Cine", "image_url": None},

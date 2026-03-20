@@ -183,11 +183,22 @@ class UserResponse(UserBase):
     id: int
     role: str
     is_active: bool
+    notifications_enabled: bool = True
     has_interests: bool = False
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class UserSettings(BaseModel):
+    """User settings response schema."""
+    notifications_enabled: bool
+
+
+class UserSettingsUpdate(BaseModel):
+    """Schema for updating user settings."""
+    notifications_enabled: bool
 
 
 class Token(BaseModel):
@@ -255,6 +266,19 @@ class Review(ReviewBase):
     venue_id: Optional[int] = None
     event_id: Optional[int] = None
     user_name: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ReviewWithContext(ReviewBase):
+    """Review with venue/event name for user history."""
+    id: int
+    venue_id: Optional[int] = None
+    event_id: Optional[int] = None
+    venue_name: Optional[str] = None
+    event_name: Optional[str] = None
     created_at: datetime
 
     class Config:

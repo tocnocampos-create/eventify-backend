@@ -8,6 +8,7 @@ from sqlalchemy import and_
 
 from app.db.models import (
     Event,
+    Review,
     UserInterest,
     UserSavedEvent,
     UserVenueFollow,
@@ -232,3 +233,28 @@ class UserPreferencesService:
             "saved_events": saved_events,
             "recommended_events": recommended_events,
         }
+
+    # ── My reviews ─────────────────────────────────────────────────
+
+    @staticmethod
+    def get_my_reviews(db: Session, user_id: int) -> list:
+        reviews = (
+            db.query(Review)
+            .options(joinedload(Review.venue), joinedload(Review.event))
+            .filter(Review.user_id == user_id)
+            .order_by(Review.created_at.desc())
+            .all()
+        )
+        result = []
+        for r in reviews:
+            result.append({
+                "id": r.id,
+                "rating": r.rating,
+                "comment": r.comment,
+                "venue_id": r.venue_id,
+                "event_id": r.event_id,
+                "venue_name": r.venue.name if r.venue else None,
+                "event_name": r.event.name if r.event else None,
+                "created_at": r.created_at,
+            })
+        return result

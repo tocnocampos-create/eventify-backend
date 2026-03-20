@@ -12,9 +12,12 @@ from app.models.schemas import (
     FollowVenueResponse,
     InterestItem,
     NotificationFeed,
+    ReviewWithContext,
     SavedEventResponse,
     UserInterestResponse,
     UserInterestsUpdate,
+    UserSettings,
+    UserSettingsUpdate,
     Venue as VenueSchema,
 )
 from app.services.user_preferences_service import UserPreferencesService
@@ -138,3 +141,35 @@ async def get_feed(
     current_user: User = Depends(get_current_user),
 ):
     return UserPreferencesService.get_notification_feed(db, current_user.id)
+
+
+# ── Settings ───────────────────────────────────────────────────
+
+@router.get("/settings", response_model=UserSettings)
+async def get_settings(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return UserSettings(notifications_enabled=current_user.notifications_enabled)
+
+
+@router.put("/settings", response_model=UserSettings)
+async def update_settings(
+    body: UserSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    current_user.notifications_enabled = body.notifications_enabled
+    db.commit()
+    db.refresh(current_user)
+    return UserSettings(notifications_enabled=current_user.notifications_enabled)
+
+
+# ── My reviews ─────────────────────────────────────────────────
+
+@router.get("/reviews", response_model=List[ReviewWithContext])
+async def get_my_reviews(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return UserPreferencesService.get_my_reviews(db, current_user.id)

@@ -17,6 +17,7 @@ async def search(
     venue_type: Optional[str] = Query(None, description="Filter by venue type (e.g., 'Bar', 'Club')"),
     event_type: Optional[str] = Query(None, description="Filter by event type (e.g., 'Música', 'Teatro')"),
     event_category: Optional[str] = Query(None, description="Filter by event category (e.g., 'Pop', 'Rock')"),
+    keyword_category: Optional[str] = Query(None, description="Filter by pill category key — matches against event keywords array (e.g., 'Nacional', 'Jazz', 'Vida Nocturna')"),
     start_date: Optional[str] = Query(None, description="Filter by event date or start of date range (format: 'YYYY-MM-DD', e.g., '2025-11-15')"),
     end_date: Optional[str] = Query(None, description="End of date range (format: 'YYYY-MM-DD', e.g., '2025-11-20'). Requires start_date."),
     min_lat: Optional[float] = Query(None, description="Minimum latitude (south boundary)", ge=-90, le=90),
@@ -102,10 +103,10 @@ async def search(
         )
     
     # Validate that at least one filter is provided
-    if not any([q, venue_type, event_type, event_category, start_date, min_lat]):
+    if not any([q, venue_type, event_type, event_category, keyword_category, start_date, min_lat]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one filter must be provided: q, venue_type, event_type, event_category, start_date, or coordinate bounds"
+            detail="At least one filter must be provided: q, venue_type, event_type, event_category, keyword_category, start_date, or coordinate bounds"
         )
     
     # Create SearchFilters object
@@ -114,6 +115,7 @@ async def search(
         venue_type=venue_type,
         event_type=event_type,
         event_category=event_category,
+        keyword_category=keyword_category,
         start_date=start_date,
         end_date=end_date,
         min_lat=min_lat,
