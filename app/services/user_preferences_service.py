@@ -124,8 +124,9 @@ class UserPreferencesService:
         for item in interests:
             row = UserInterest(
                 user_id=user_id,
-                category=item["category"],
+                category=item.get("category"),
                 subtype=item.get("subtype"),
+                exploration_mode=item.get("exploration_mode"),
             )
             db.add(row)
             new_rows.append(row)
@@ -215,6 +216,8 @@ class UserPreferencesService:
                 continue
             score = 0
             for interest in interests:
+                if not interest.category:  # skip exploration-mode-only rows
+                    continue
                 if ev.category and ev.category.lower() == interest.category.lower():
                     if interest.subtype and ev.type and ev.type.lower() == interest.subtype.lower():
                         score += 3

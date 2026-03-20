@@ -353,16 +353,18 @@ class EventDetail(BaseModel):
 
 # User Preferences Schemas
 class InterestItem(BaseModel):
-    """Single interest input."""
-    category: str = Field(..., max_length=100)
+    """Single interest input — either a category/subtype row or an exploration_mode row."""
+    category: Optional[str] = Field(None, max_length=100)
     subtype: Optional[str] = Field(None, max_length=100)
+    exploration_mode: Optional[str] = Field(None, max_length=50)
 
 
 class UserInterestResponse(BaseModel):
     """Single interest output."""
     id: int
-    category: str
+    category: Optional[str] = None
     subtype: Optional[str] = None
+    exploration_mode: Optional[str] = None
 
     class Config:
         from_attributes = True

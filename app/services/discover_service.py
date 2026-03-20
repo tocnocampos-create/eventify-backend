@@ -1,7 +1,7 @@
 """Discover feed service — trending, today, weekly, nearby, personalized."""
 import math
 from datetime import date, timedelta
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
@@ -46,7 +46,7 @@ class DiscoverService:
 
         if user_id is not None:
             result["for_you"] = DiscoverService._get_personalized_picks(
-                db, user_id, today_str
+                db, user_id, today_str, lat=lat, lon=lon
             )
 
         return result
@@ -240,11 +240,33 @@ class DiscoverService:
 
     # ── Personalized Picks (For You) ──────────────────────────────
 
+    # Keywords for mode-based filtering (all lowercase for comparison)
+    _EXPLORADOR_KW: Set[str] = {"city tour", "tour", "barrio", "patrimonio", "ruta"}
+    _ENGRUPO_KW: Set[str] = {"club", "dj", "after", "vida nocturna", "festival"}
+    _TRANQUILO_EXCLUDE_KW: Set[str] = {"club", "boliche", "after", "vida nocturna", "dj"}
+
+    @staticmethod
+    def _event_keywords_lower(ev: Event) -> Set[str]:
+        """Return the event's keyword list as a lowercased set."""
+        return {k.lower() for k in (ev.keywords or [])}
+
     @staticmethod
     def _get_personalized_picks(
-        db: Session, user_id: int, today_str: str, limit: int = 10
+        db: Session,
+        user_id: int,
+        today_str: str,
+        lat: Optional[float] = None,
+        lon: Optional[float] = None,
+        limit: int = 10,
     ) -> List[Event]:
         interests = db.query(UserInterest).filter_by(user_id=user_id).all()
+
+        # Split interests into two buckets
+        category_interests = [i for i in interests if i.category]
+        active_modes: Set[str] = {
+            i.exploration_mode for i in interests if i.exploration_mode
+        }
+
         followed_venue_ids = [
             r.venue_id
             for r in db.query(UserVenueFollow.venue_id)
@@ -265,12 +287,45 @@ class DiscoverService:
             .all()
         )
 
+        # Pre-compute trending scores once if EnGrupo is active (avoids N+1)
+        trending_scores: dict = {}
+        if "EnGrupo" in active_modes:
+            saves_counts = dict(
+                db.query(UserSavedEvent.event_id, func.count())
+                .group_by(UserSavedEvent.event_id)
+                .all()
+            )
+            review_counts = dict(
+                db.query(Review.event_id, func.count())
+                .filter(Review.event_id.isnot(None))
+                .group_by(Review.event_id)
+                .all()
+            )
+            for ev_id in set(saves_counts) | set(review_counts):
+                trending_scores[ev_id] = (
+                    saves_counts.get(ev_id, 0) * 3
+                    + review_counts.get(ev_id, 0) * 2
+                )
+
         scored = []
         for ev in upcoming:
             if ev.id in saved_event_ids:
                 continue
+
+            kw = DiscoverService._event_keywords_lower(ev)
+
+            # ── Hard exclusions (applied before scoring) ──────────
+            if "EnFamilia" in active_modes:
+                if ev.time_start and ev.time_start >= "22:00":
+                    continue
+
+            if "Tranquilo" in active_modes:
+                if kw & DiscoverService._TRANQUILO_EXCLUDE_KW:
+                    continue
+
+            # ── Base category / follow scoring ────────────────────
             score = 0
-            for interest in interests:
+            for interest in category_interests:
                 if ev.category and ev.category.lower() == interest.category.lower():
                     if (
                         interest.subtype
@@ -282,6 +337,42 @@ class DiscoverService:
                         score += 2
             if ev.venue_id in followed_venue_ids:
                 score += 1
+
+            # ── Exploration mode boosts ───────────────────────────
+            if "Espontaneo" in active_modes:
+                if ev.date == today_str:
+                    score += 3
+                if ev.time_start and ev.time_start >= "20:00":
+                    score += 2
+
+            if "Explorador" in active_modes:
+                if kw & DiscoverService._EXPLORADOR_KW:
+                    score += 3
+                if ev.venue and ev.venue.neighborhood_id is not None:
+                    score += 2
+
+            if "EnFamilia" in active_modes:
+                if ev.kids_friendly:
+                    score += 5
+                if ev.age_restriction is None or ev.age_restriction <= 12:
+                    score += 2
+
+            if "Tranquilo" in active_modes:
+                if lat is not None and lon is not None and ev.venue:
+                    coords = ev.venue.coordinates
+                    if coords and len(coords) >= 2:
+                        dist = DiscoverService._haversine(
+                            lat, lon, coords[0], coords[1]
+                        )
+                        if dist <= 3.0:
+                            score += 4
+
+            if "EnGrupo" in active_modes:
+                if kw & DiscoverService._ENGRUPO_KW:
+                    score += 3
+                if trending_scores.get(ev.id, 0) > 5:
+                    score += 2
+
             if score > 0:
                 scored.append((score, ev.date, ev))
 

@@ -1,4 +1,5 @@
 """Discover feed endpoint — curated content for the discovery screen."""
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -32,6 +33,12 @@ def get_discover_feed(
     current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     user_id = current_user.id if current_user else None
+
+    # Touch last_active_at for authenticated users
+    if current_user:
+        current_user.last_active_at = datetime.now(timezone.utc)
+        db.commit()
+
     feed = DiscoverService.get_discover_feed(
         db=db,
         user_id=user_id,

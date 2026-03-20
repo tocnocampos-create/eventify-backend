@@ -23,6 +23,7 @@ class User(Base):
     role = Column(Enum(UserRole), default=UserRole.USER, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     notifications_enabled = Column(Boolean, default=True, nullable=False)
+    last_active_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
@@ -71,6 +72,10 @@ class Venue(Base):
     website_url = Column(String(500), nullable=True)
     menu_pdf_url = Column(String(500), nullable=True)
     neighborhood_id = Column(Integer, ForeignKey("neighborhoods.id"), nullable=True, index=True)
+    source_url = Column(String(500), nullable=True)
+    is_verified = Column(Boolean, default=False, nullable=False, server_default="false")
+    scraped_at = Column(DateTime(timezone=True), nullable=True)
+    accessibility_features = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     # Relationships
@@ -97,6 +102,11 @@ class Event(Base):
     time_end = Column(String(10), nullable=True)  # HH:mm
     image_url = Column(String(500), nullable=True)
     url = Column(String(500), nullable=True)
+    source_url = Column(String(500), nullable=True)
+    is_verified = Column(Boolean, default=False, nullable=False, server_default="false")
+    scraped_at = Column(DateTime(timezone=True), nullable=True)
+    kids_friendly = Column(Boolean, default=False, nullable=False, server_default="false")
+    age_restriction = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     # Relationships
@@ -197,16 +207,16 @@ class UserSavedEvent(Base):
 
 
 class UserInterest(Base):
-    """User interest categories and optional subtypes."""
+    """User interest categories/subtypes and exploration modes (one row per entry)."""
     __tablename__ = "user_interests"
-    __table_args__ = (
-        UniqueConstraint("user_id", "category", "subtype", name="uq_user_interest"),
-    )
+    # Unique index is managed by Alembic migration using NULLS NOT DISTINCT
+    # so that exploration-mode-only rows (category=NULL) are properly deduplicated.
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    category = Column(String(100), nullable=False)
+    category = Column(String(100), nullable=True)
     subtype = Column(String(100), nullable=True)
+    exploration_mode = Column(String(50), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
