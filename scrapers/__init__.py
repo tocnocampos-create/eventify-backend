@@ -1,0 +1,1 @@
+"""Eventify scraper package."""
