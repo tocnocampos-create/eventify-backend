@@ -1,5 +1,5 @@
 """Search service for filtering venues and events."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Dict, List, Optional, Any
 from sqlalchemy import cast, or_, func, String
@@ -372,14 +372,18 @@ class SearchService:
         """
         if not venues:
             return []
-        
+
         venue_ids = [venue.id for venue in venues]
-        
+
         if not has_event_filters:
             # No event filters: return all events for these venues
             return self.db.query(Event).filter(Event.venue_id.in_(venue_ids)).all()
-        
-        # Apply event filters and restrict to venues
+
+        # Apply event filters WITHOUT the text query (q).
+        # Venues may have been found by name match (e.g. "Movistar Arena" when q="movistar").
+        # Re-applying q would exclude their events unless the event name also contains q.
+        # We want all upcoming events at returned venues, not just text-matched ones.
         event_query = self.db.query(Event)
-        event_query = self._apply_event_filters(event_query, filters)
+        filters_no_q = replace(filters, q=None) if filters.q else filters
+        event_query = self._apply_event_filters(event_query, filters_no_q)
         return event_query.filter(Event.venue_id.in_(venue_ids)).all()
