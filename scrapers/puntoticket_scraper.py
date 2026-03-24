@@ -1,13 +1,15 @@
-"""PuntoTicket scraper — fetches events from puntoticket.com/todos.
+"""PuntoTicket scraper — fetches events from category-specific listing pages.
 
+Scrapes /musica, /teatro, /familia, /especiales (sports excluded).
 Only Santiago events are kept.  Uses requests + BeautifulSoup4.
-A 2-second delay is inserted between paginated requests.
+A 2-second delay is inserted between every request (listing + detail pages).
 
 Run for a dry-run (fetch only, no DB writes):
     python scrapers/puntoticket_scraper.py --debug
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -28,7 +30,23 @@ logger = logging.getLogger(__name__)
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 BASE_URL = "https://www.puntoticket.com"
-LISTING_URL = f"{BASE_URL}/todos"
+
+# Category listing pages to scrape — /deportes is intentionally excluded.
+CATEGORY_URLS: list[tuple[str, str]] = [
+    ("musica",     f"{BASE_URL}/musica"),
+    ("teatro",     f"{BASE_URL}/teatro"),
+    ("familia",    f"{BASE_URL}/familia"),
+    ("especiales", f"{BASE_URL}/especiales"),
+]
+
+# Pre-classification hints applied to every event scraped from that category.
+# The classifier can still override these once it sees the full event data.
+_CATEGORY_HINTS: dict[str, dict[str, Any]] = {
+    "musica":     {"category": "Música"},
+    "teatro":     {"category": "Teatro"},
+    "familia":    {"category": "Teatro", "kids_friendly": True},
+    "especiales": {},  # leave entirely to classifier
+}
 
 HEADERS = {
     "User-Agent": (
@@ -156,13 +174,14 @@ def _absolute_url(href: str) -> str:
 # ── Main scraper class ────────────────────────────────────────────────────────
 
 class PuntoTicketScraper(BaseScraper):
-    """Scrapes event listings from puntoticket.com/todos."""
+    """Scrapes event listings from PuntoTicket category pages (no sports)."""
 
     name = "puntoticket"
 
-    def __init__(self, max_pages: int = 10, debug: bool = False) -> None:
+    def __init__(self, max_pages: int = 10, max_events: int = 0, debug: bool = False) -> None:
         super().__init__()
         self.max_pages = max_pages
+        self.max_events = max_events  # 0 means unlimited
         self.debug = debug
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
@@ -344,6 +363,97 @@ class PuntoTicketScraper(BaseScraper):
 
         return event
 
+    # ── Detail page fetcher ───────────────────────────────────────────────────
+
+    def fetch_event_detail(self, url: str) -> dict[str, Any]:
+        """Fetch an event's detail page and extract price, description, time_start.
+
+        Uses REQUEST_DELAY before each fetch.  On any error, returns an empty
+        dict so the caller can keep the event with nulls for missing fields.
+        """
+        time.sleep(REQUEST_DELAY)
+        soup = self._get_soup(url)
+        if soup is None:
+            return {}
+
+        result: dict[str, Any] = {}
+
+        # ── 1. horasPorFecha script — best source for price + time ────────────
+        for script in soup.find_all("script"):
+            raw_js = script.string or ""
+            if "horasPorFecha" not in raw_js:
+                continue
+            m = re.search(r"horasPorFecha\s*=\s*(\{.*?\});", raw_js, re.DOTALL)
+            if not m:
+                break
+            try:
+                data: dict = json.loads(m.group(1))
+                all_min: list[float] = []
+                all_max: list[float] = []
+                first_hora: str | None = None
+                for entries in data.values():
+                    for entry in entries:
+                        pmin = entry.get("PrecioMinimo")
+                        pmax = entry.get("PrecioMaximo")
+                        if pmin is not None and pmin > 0:
+                            all_min.append(float(pmin))
+                        if pmax is not None and pmax > 0:
+                            all_max.append(float(pmax))
+                        if first_hora is None and entry.get("hora"):
+                            first_hora = entry["hora"]
+
+                if all_min:
+                    result["price_range"] = [min(all_min), max(all_max or all_min)]
+                else:
+                    # All prices are 0 → free event
+                    all_prices = [
+                        entry.get("PrecioMinimo", 1)
+                        for entries in data.values()
+                        for entry in entries
+                    ]
+                    if all_prices and all(p == 0 for p in all_prices):
+                        result["price_range"] = [0.0, 0.0]
+
+                if first_hora:
+                    result["time_start"] = first_hora
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+            break  # only one horasPorFecha script expected
+
+        # ── 2. Fallback price: div.form-group or td.precio-total ──────────────
+        if "price_range" not in result:
+            for el in soup.find_all("div", class_="form-group"):
+                parsed = _parse_price(el.get_text(strip=True))
+                if parsed:
+                    result["price_range"] = parsed
+                    break
+
+        if "price_range" not in result:
+            prices: list[float] = []
+            for td in soup.find_all("td", class_=re.compile(r"precio-total")):
+                parsed = _parse_price(td.get_text(strip=True))
+                if parsed and parsed[0] > 0:
+                    prices.extend(parsed)
+            if prices:
+                result["price_range"] = [min(prices), max(prices)]
+
+        # ── 3. Description: div.detail-wrap (narrative block) then meta ───────
+        for el in soup.find_all("div", class_=re.compile(r"detail-wrap")):
+            classes = set(el.get("class", []))
+            # Target the content block (not the ticket-sector table)
+            if "pr-lg-20" in classes or "pt-0_4" in classes:
+                txt = el.get_text(" ", strip=True)
+                if len(txt) > 30:
+                    result["description"] = txt[:1500]
+                    break
+
+        if "description" not in result:
+            meta = soup.find("meta", {"name": "description"})
+            if meta and meta.get("content"):
+                result["description"] = meta["content"][:1500]
+
+        return result
+
     # ── Pagination ────────────────────────────────────────────────────────────
 
     def _next_page_url(self, soup: BeautifulSoup, current_url: str) -> str | None:
@@ -360,53 +470,91 @@ class PuntoTicketScraper(BaseScraper):
     # ── Public fetch_events ───────────────────────────────────────────────────
 
     def fetch_events(self) -> list[dict[str, Any]]:
-        """Fetch all Santiago events from puntoticket.com/todos.
+        """Fetch Santiago events from all configured category listing pages.
 
+        Iterates over CATEGORY_URLS in order, paginating each independently.
+        Events seen in multiple categories are deduplicated by URL.
         Returns a list of event dicts ready for classifier + enricher.
         """
         all_events: list[dict[str, Any]] = []
-        url: str | None = LISTING_URL
-        page = 1
+        seen_urls: set[str] = set()
 
-        while url and page <= self.max_pages:
-            logger.info("Fetching page %d: %s", page, url)
-            soup = self._get_soup(url)
-            if soup is None:
+        for cat_slug, cat_start_url in CATEGORY_URLS:
+            hints = _CATEGORY_HINTS.get(cat_slug, {})
+            logger.info("Scraping category %r — start URL: %s", cat_slug, cat_start_url)
+
+            url: str | None = cat_start_url
+            page = 1
+
+            while url and page <= self.max_pages:
+                logger.info("[%s] Fetching page %d: %s", cat_slug, page, url)
+                soup = self._get_soup(url)
+                if soup is None:
+                    break
+
+                # Debug mode: dump raw HTML of the first card and stop
+                if self.debug and page == 1:
+                    self._print_debug(soup)
+                    break
+
+                cards = self._find_cards(soup)
+                if not cards:
+                    logger.warning("[%s] No cards on page %d — stopping category", cat_slug, page)
+                    break
+
+                page_events = 0
+                for card in cards:
+                    ev = self._parse_card(card)
+                    if ev is None:
+                        continue
+
+                    # Santiago filter
+                    location_hint = ev.get("venue_name", "") + " " + ev.get("name", "")
+                    if not _is_santiago(location_hint):
+                        continue
+
+                    # Deduplicate across categories
+                    if ev["url"] in seen_urls:
+                        continue
+                    seen_urls.add(ev["url"])
+
+                    # Apply category hints (setdefault: classifier may override later)
+                    for key, val in hints.items():
+                        ev.setdefault(key, val)
+
+                    # Fetch detail page when description or price is missing
+                    if ev.get("url") and (
+                        not ev.get("description") or not ev.get("price_range")
+                    ):
+                        logger.debug("[%s] Fetching detail for %r", cat_slug, ev.get("name"))
+                        detail = self.fetch_event_detail(ev["url"])
+                        for key, val in detail.items():
+                            ev.setdefault(key, val)
+
+                    all_events.append(ev)
+                    page_events += 1
+
+                    if self.max_events and len(all_events) >= self.max_events:
+                        logger.info("Reached max_events=%d — stopping early", self.max_events)
+                        break
+
+                logger.info("[%s] Page %d: %d new Santiago events", cat_slug, page, page_events)
+
+                if self.max_events and len(all_events) >= self.max_events:
+                    break
+
+                next_url = self._next_page_url(soup, url)
+                if next_url == url:
+                    break  # guard against infinite loop
+                url = next_url
+                page += 1
+                if url:
+                    time.sleep(REQUEST_DELAY)
+
+            if self.max_events and len(all_events) >= self.max_events:
                 break
 
-            # Debug mode: dump raw HTML of the first card and stop
-            if self.debug and page == 1:
-                self._print_debug(soup)
-                break
-
-            cards = self._find_cards(soup)
-            if not cards:
-                logger.warning("No event cards found on page %d — stopping", page)
-                break
-
-            page_events = 0
-            for card in cards:
-                ev = self._parse_card(card)
-                if ev is None:
-                    continue
-                # Santiago filter
-                location_hint = ev.get("venue_name", "") + " " + ev.get("name", "")
-                if not _is_santiago(location_hint):
-                    continue
-                all_events.append(ev)
-                page_events += 1
-
-            logger.info("Page %d: %d Santiago events collected", page, page_events)
-
-            next_url = self._next_page_url(soup, url)
-            if next_url == url:
-                break  # guard against infinite loop
-            url = next_url
-            page += 1
-            if url:
-                time.sleep(REQUEST_DELAY)
-
-        logger.info("Total events collected: %d", len(all_events))
+        logger.info("Total events collected across all categories: %d", len(all_events))
         return all_events
 
     # ── Debug helper ─────────────────────────────────────────────────────────

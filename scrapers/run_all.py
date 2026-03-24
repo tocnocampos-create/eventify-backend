@@ -44,6 +44,7 @@ def _run_pipeline(
     scraper: PuntoTicketScraper,
     db,
     dry_run: bool = False,
+    verbose: bool = False,
 ) -> dict[str, int]:
     """Run fetch → classify → enrich → (optionally) save for one scraper."""
     stats = {"found": 0, "created": 0, "updated": 0, "skipped": 0, "failed": 0}
@@ -78,7 +79,7 @@ def _run_pipeline(
     if dry_run:
         logger.info("[%s] DRY-RUN — skipping DB writes", scraper.name)
         stats["skipped"] = len(processed)
-        _print_sample(processed)
+        _print_sample(processed, verbose=verbose)
         return stats
 
     # 3. Save (deduplication inside)
@@ -101,7 +102,7 @@ def _run_pipeline(
     return stats
 
 
-def _print_sample(events: list[dict], n: int = 5) -> None:
+def _print_sample(events: list[dict], n: int = 5, verbose: bool = False) -> None:
     print(f"\n── Sample events (first {min(n, len(events))}) ─────────────────────────────────")
     for ev in events[:n]:
         print(
@@ -112,6 +113,13 @@ def _print_sample(events: list[dict], n: int = 5) -> None:
             f"type={ev.get('type', '?')}  "
             f"venue_id={ev.get('venue_id')}"
         )
+        if verbose:
+            price = ev.get("price_range")
+            desc = ev.get("description", "")
+            time_s = ev.get("time_start", "")
+            print(f"    price_range : {price}")
+            print(f"    time_start  : {time_s!r}")
+            print(f"    description : {(desc[:200] + '…') if len(desc) > 200 else desc!r}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -129,6 +137,17 @@ def main() -> None:
         default=10,
         help="Maximum listing pages per scraper (default: 10)",
     )
+    parser.add_argument(
+        "--max-events",
+        type=int,
+        default=0,
+        help="Stop after this many events per scraper (0 = unlimited)",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print price and description for each sample event",
+    )
     args = parser.parse_args()
 
     engine = create_engine(_get_database_url(), pool_pre_ping=True)
@@ -137,7 +156,7 @@ def main() -> None:
     totals = {"found": 0, "created": 0, "updated": 0, "skipped": 0, "failed": 0}
 
     scrapers = [
-        PuntoTicketScraper(max_pages=args.max_pages),
+        PuntoTicketScraper(max_pages=args.max_pages, max_events=args.max_events),
         # Add more scrapers here as they are implemented:
         # FoobarScraper(),
     ]
@@ -146,7 +165,7 @@ def main() -> None:
         for scraper in scrapers:
             logger.info("━━━ Running scraper: %s ━━━", scraper.name)
             try:
-                stats = _run_pipeline(scraper, db, dry_run=args.dry_run)
+                stats = _run_pipeline(scraper, db, dry_run=args.dry_run, verbose=args.verbose)
                 for key in totals:
                     totals[key] += stats.get(key, 0)
             except Exception as exc:
