@@ -39,8 +39,11 @@ CATEGORY_URLS: list[tuple[str, str]] = [
     ("especiales", f"{BASE_URL}/especiales"),
 ]
 
-# Pre-classification hints applied to every event scraped from that category.
-# The classifier can still override these once it sees the full event data.
+# Category overrides applied to every event scraped from that category URL.
+# musica / teatro / familia: HARD OVERRIDES — the classifier must not change
+# the category (or assign an incompatible type) for these events.
+# A "_locked_category" sentinel key is added so the classifier enforces this.
+# especiales: no override — the classifier decides freely.
 _CATEGORY_HINTS: dict[str, dict[str, Any]] = {
     "musica":     {"category": "Música"},
     "teatro":     {"category": "Teatro"},
@@ -88,7 +91,7 @@ _MONTHS_ES: dict[str, int] = {
     "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
     "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
     # abbreviated
-    "ene": 1, "feb": 2, "mar": 3, "abr": 4,
+    "ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5,
     "jun": 6, "jul": 7, "ago": 8, "sep": 9, "oct": 10, "nov": 11, "dic": 12,
 }
 
@@ -518,9 +521,13 @@ class PuntoTicketScraper(BaseScraper):
                         continue
                     seen_urls.add(ev["url"])
 
-                    # Apply category hints (setdefault: classifier may override later)
+                    # Apply category hints as hard overrides (direct assignment).
+                    # Add the "_locked_category" sentinel so the classifier
+                    # preserves both the category and picks a compatible type.
                     for key, val in hints.items():
-                        ev.setdefault(key, val)
+                        ev[key] = val
+                    if hints.get("category"):
+                        ev["_locked_category"] = hints["category"]
 
                     # Fetch detail page when description or price is missing
                     if ev.get("url") and (

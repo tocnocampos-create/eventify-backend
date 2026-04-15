@@ -230,6 +230,13 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
     Does NOT overwrite fields that already have a value unless
     the field is "keywords" (always recomputed).
 
+    When the scraper has set a "_locked_category" sentinel (e.g. because the
+    event came from the /musica or /teatro listing URL), that category is
+    treated as a hard override: it is always written to event["category"] and
+    only rule types whose _RULE_TO_CATEGORY matches it are considered, so a
+    Música event whose title contains words like "historia" or "fotografías"
+    will never receive type="Exposición".
+
     Args:
         event: dict with at least "name".  Optional: "description",
                "venue_type" (the resolved venue's type string).
@@ -246,21 +253,40 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
         kws.update(KEYWORD_RULES[rule])
     event["keywords"] = sorted(kws)
 
-    # kids_friendly
-    event["kids_friendly"] = "Teatro_Familiar" in matched
+    # kids_friendly — set True when keywords match; never clear a True already
+    # set by the scraper (e.g. the /familia source-URL hint).
+    if "Teatro_Familiar" in matched:
+        event["kids_friendly"] = True
+    elif not event.get("kids_friendly"):
+        event["kids_friendly"] = False
+
+    # Honour source-URL category lock set by the scraper.
+    # Pop so the sentinel never reaches the database.
+    locked_category: str | None = event.pop("_locked_category", None)
+    if locked_category:
+        event["category"] = locked_category
 
     # category and type — pick first match in priority order
     category: str | None = event.get("category") or None
     etype: str | None = event.get("type") or None
 
     for rule in _RULE_PRIORITY:
-        if rule in matched:
-            if category is None:
-                category = _RULE_TO_CATEGORY.get(rule)
-            if etype is None:
-                etype = _RULE_TO_TYPE.get(rule)
-            if category is not None and etype is not None:
-                break
+        if rule not in matched:
+            continue
+        # When a category is locked, skip rules that would resolve to a
+        # different (or unrelated) category — they would produce a mismatched
+        # type (e.g. "Exposición" for a Música event whose title contains
+        # "historia" or "fotografías").
+        if locked_category:
+            rule_cat = _RULE_TO_CATEGORY.get(rule)
+            if rule_cat != locked_category:
+                continue
+        if category is None:
+            category = _RULE_TO_CATEGORY.get(rule)
+        if etype is None:
+            etype = _RULE_TO_TYPE.get(rule)
+        if category is not None and etype is not None:
+            break
 
     if category is not None:
         event["category"] = category
