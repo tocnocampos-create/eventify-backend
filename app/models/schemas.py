@@ -219,6 +219,29 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Forgot password request schema."""
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    """Forgot password response schema (MVP: code returned directly)."""
+    message: str
+    code: str
+
+
+class ResetPasswordRequest(BaseModel):
+    """Reset password request schema."""
+    email: EmailStr
+    code: str
+    new_password: str = Field(..., min_length=8)
+
+
+class ResetPasswordResponse(BaseModel):
+    """Reset password response schema."""
+    message: str
+
+
 # Search Response Schemas
 class SearchMeta(BaseModel):
     """Metadata for search results."""

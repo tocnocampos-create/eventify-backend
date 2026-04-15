@@ -206,6 +206,18 @@ class UserSavedEvent(Base):
     event = relationship("Event", back_populates="saved_by")
 
 
+class PasswordResetCode(Base):
+    """Short-lived 6-digit codes for password reset."""
+    __tablename__ = "password_reset_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), nullable=False, index=True)
+    code = Column(String(6), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Boolean, default=False, nullable=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class UserInterest(Base):
     """User interest categories/subtypes and exploration modes (one row per entry)."""
     __tablename__ = "user_interests"
