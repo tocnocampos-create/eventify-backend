@@ -61,6 +61,9 @@ def save_or_update(event: dict[str, Any], db: Session) -> str:
         changed = False
         for field in _MUTABLE_FIELDS:
             new_val = event.get(field)
+            # Treat empty list as NULL (e.g. price_range=[]) — never store {} in DB
+            if isinstance(new_val, list) and len(new_val) == 0:
+                new_val = None
             if new_val is not None and getattr(existing, field, None) != new_val:
                 setattr(existing, field, new_val)
                 changed = True
@@ -74,7 +77,12 @@ def save_or_update(event: dict[str, Any], db: Session) -> str:
         return "skipped"
 
     # ── Create path ───────────────────────────────────────────────────────────
-    payload = {k: v for k, v in event.items() if k in _ALLOWED_FIELDS and v is not None}
+    payload = {
+        k: v for k, v in event.items()
+        if k in _ALLOWED_FIELDS
+        and v is not None
+        and not (isinstance(v, list) and len(v) == 0)  # empty list → NULL
+    }
     new_event = Event(**payload)
     db.add(new_event)
     logger.debug("Created event name=%r  source_url=%r", event.get("name"), source_url)
