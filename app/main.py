@@ -25,10 +25,14 @@ app = FastAPI(
     version=settings.APP_VERSION
 )
 
+_cors_origins = settings.cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    # allow_credentials=True is incompatible with allow_origins=["*"] per the
+    # CORS spec — Starlette silently drops the wildcard when credentials are
+    # enabled.  Disable credentials for wildcard so the header is actually sent.
+    allow_credentials=_cors_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
