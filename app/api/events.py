@@ -6,7 +6,7 @@ from app.db.base import get_db
 from app.db.models import User
 from app.models.schemas import Event, EventCreate, EventUpdate, EventDetail
 from app.services.event_service import EventService
-from app.api.dependencies import get_current_user, get_admin_user
+from app.api.dependencies import get_current_user, get_optional_current_user, get_admin_user
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -18,7 +18,7 @@ async def get_events(
     venue_id: Optional[int] = Query(None, description="Filter by venue ID"),
     category: Optional[str] = Query(None, description="Filter by category"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """Get all events with optional filtering."""
     events = EventService.get_events(
@@ -31,7 +31,7 @@ async def get_events(
 async def get_event_detail(
     event_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """Get event detail with venue and reviews."""
     result = EventService.get_event_detail(db, event_id)

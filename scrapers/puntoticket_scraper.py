@@ -239,7 +239,7 @@ class PuntoTicketScraper(BaseScraper):
         for a in soup.find_all("a", href=True):
             href = a["href"]
             # PuntoTicket detail URLs: "/" + slug (no subfolder path like /eventos/)
-            if not re.match(r"^/[a-z0-9][a-z0-9\-]+$", href):
+            if not re.match(r"^/[a-z0-9][a-z0-9\-_]+$", href, re.IGNORECASE):
                 continue
             if href in seen:
                 continue
@@ -313,8 +313,11 @@ class PuntoTicketScraper(BaseScraper):
                 or img.get("data-lazy-src")
                 or img.get("data-original")
             )
-            if src and src.startswith("http"):
-                event["image_url"] = src
+            if src:
+                if src.startswith("//"):
+                    src = "https:" + src
+                if src.startswith("http"):
+                    event["image_url"] = src
 
         # ── Venue — <p class="descripcion"><strong>Name</strong> / …</p> ─────
         desc_el = card.find("p", class_=re.compile(r"descripcion|description|lugar|venue", re.I))
@@ -346,9 +349,16 @@ class PuntoTicketScraper(BaseScraper):
                 fecha_el.get("datetime")
                 or fecha_el.get_text(strip=True)
             )
-            # For date ranges like "21 de marzo 2026 - 22 de marzo 2026"
-            # take the FIRST date (start date)
-            first_part = raw_date.split("-")[0].split("al")[0].strip()
+            # If the source is an ISO datetime attribute ("2026-03-21" or
+            # "2026-03-21T20:00:00"), parse it directly — splitting on "-"
+            # would truncate it to "2026" which fails to parse.
+            iso_m = re.match(r"(\d{4}-\d{2}-\d{2})", raw_date)
+            if iso_m:
+                first_part = iso_m.group(1)
+            else:
+                # For prose date ranges like "21 de marzo 2026 - 22 de marzo 2026"
+                # or "21 de marzo al 22 de marzo", take the first date only.
+                first_part = raw_date.split(" - ")[0].split(" al ")[0].strip()
             parsed = _parse_date_es(first_part)
             if parsed:
                 event["date"] = parsed
@@ -386,7 +396,14 @@ class PuntoTicketScraper(BaseScraper):
             raw_js = script.string or ""
             if "horasPorFecha" not in raw_js:
                 continue
-            m = re.search(r"horasPorFecha\s*=\s*(\{.*?\});", raw_js, re.DOTALL)
+            # The value may be terminated by ";" (var assignment) or ","
+            # (property inside a larger object literal) depending on how
+            # PuntoTicket bundles the page data.
+            m = re.search(
+                r"horasPorFecha\s*[=:]\s*(\{.*?\})\s*[,;]",
+                raw_js,
+                re.DOTALL,
+            )
             if not m:
                 break
             try:
@@ -440,7 +457,47 @@ class PuntoTicketScraper(BaseScraper):
             if prices:
                 result["price_range"] = [min(prices), max(prices)]
 
-        # ── 3. Description: div.detail-wrap (narrative block) then meta ───────
+        # ── 3. JSON-LD structured data — zero-fragility fallback for price,
+        #        description, and start time when DOM selectors miss ────────────
+        if "price_range" not in result or "description" not in result or "time_start" not in result:
+            for script in soup.find_all("script", {"type": "application/ld+json"}):
+                try:
+                    ld = json.loads(script.string or "")
+                    items = ld if isinstance(ld, list) else [ld]
+                    for item in items:
+                        if item.get("@type") not in (
+                            "Event", "MusicEvent", "TheaterEvent",
+                            "SportsEvent", "ComedyEvent", "DanceEvent",
+                        ):
+                            continue
+                        # Price
+                        if "price_range" not in result:
+                            offers = item.get("offers") or {}
+                            if isinstance(offers, list):
+                                offers = offers[0]
+                            low = offers.get("price") or offers.get("lowPrice")
+                            high = offers.get("highPrice") or low
+                            if low is not None:
+                                try:
+                                    result["price_range"] = [float(low), float(high)]
+                                except (TypeError, ValueError):
+                                    pass
+                        # Description
+                        if "description" not in result:
+                            desc = item.get("description")
+                            if desc and isinstance(desc, str) and len(desc.strip()) > 10:
+                                result["description"] = desc.strip()[:1500]
+                        # Start time (ISO 8601: "2026-03-21T20:00:00-03:00")
+                        if "time_start" not in result:
+                            start_dt = item.get("startDate") or ""
+                            t_m = re.search(r"T(\d{2}):(\d{2})", start_dt)
+                            if t_m:
+                                result["time_start"] = f"{t_m.group(1)}:{t_m.group(2)}"
+                        break  # first matching Event item is enough
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    pass
+
+        # ── 4. Description: div.detail-wrap (narrative block) then meta ───────
         for el in soup.find_all("div", class_=re.compile(r"detail-wrap")):
             classes = set(el.get("class", []))
             # Target the content block (not the ticket-sector table)

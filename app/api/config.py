@@ -39,11 +39,27 @@ CONFIG = {
             "color": "#3B52D8",
             "badge_color": "rgba(59, 82, 216, 0.7)",
             "subcategories": ["Acción", "Drama", "Terror", "Comedia", "Romántica", "Familiar"]
+        },
+        {
+            "name": "Familia",
+            "icon": "people",
+            "color": "#F59E0B",
+            "badge_color": "rgba(245, 158, 11, 0.7)",
+            "subcategories": ["Infantil", "Todas las edades"]
+        },
+        {
+            "name": "Vida Nocturna",
+            "icon": "moon",
+            "color": "#6D28D9",
+            "badge_color": "rgba(109, 40, 217, 0.7)",
+            "subcategories": ["DJ", "Club", "After", "Electrónica"]
         }
     ],
     "venue_types": [
         "Bar", "Sala de Concierto", "Club", "Teatro",
-        "Arena", "Museo", "Centro Cultural", "Galería", "Cine"
+        "Arena", "Museo", "Centro Cultural", "Galería", "Cine",
+        "Parque", "Cerro", "Bosque", "Santuario", "Monumento Natural",
+        "Parque Nacional", "Salto"
     ],
     "available_cities": ["Santiago"],
     "max_price": 300000,

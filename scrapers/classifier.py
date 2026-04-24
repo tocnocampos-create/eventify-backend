@@ -133,9 +133,9 @@ _RULE_PRIORITY: list[str] = [
     "Rock",
     "Pop",
     "Indie",
-    "Electrónica",
     "Folclore",
     "Latina",
+    "Electrónica",   # after named genres so Rock/Jazz/Pop win over DJ for live music
     "Arte",
     "Museo",
     "Vida Nocturna",
@@ -147,31 +147,31 @@ _RULE_PRIORITY: list[str] = [
 ]
 
 _RULE_TO_CATEGORY: dict[str, str] = {
-    "Cine": "Cine",
-    "Comedia": "Comedia",
-    "Teatro_Familiar": "Teatro",
-    "Teatro_Drama": "Teatro",
-    "Jazz": "Música",
-    "Rock": "Música",
-    "Pop": "Música",
-    "Indie": "Música",
-    "Electrónica": "Música",
-    "Folclore": "Música",
-    "Latina": "Música",
-    "Arte": "Arte",
-    "Museo": "Arte",
-    "Vida Nocturna": "Música",
-    "Sunset": "Música",
-    "Feria": "Arte",
-    "Aire_Libre": None,
-    "Barrios": None,
-    "City_Tour": None,
+    "Cine":           "Cine",
+    "Comedia":        "Comedia",
+    "Teatro_Familiar": "Familia",        # Familia is the correct standard category
+    "Teatro_Drama":   "Teatro",
+    "Jazz":           "Música",
+    "Rock":           "Música",
+    "Pop":            "Música",
+    "Indie":          "Música",
+    "Electrónica":    "Vida Nocturna",   # DJ/club events → Vida Nocturna, not Música
+    "Folclore":       "Música",
+    "Latina":         "Música",
+    "Arte":           "Arte",
+    "Museo":          "Arte",
+    "Vida Nocturna":  "Vida Nocturna",   # was incorrectly "Música"
+    "Sunset":         "Vida Nocturna",   # happy hour / rooftop → nightlife
+    "Feria":          "Arte",
+    "Aire_Libre":     None,
+    "Barrios":        None,
+    "City_Tour":      None,
 }
 
 _RULE_TO_TYPE: dict[str, str] = {
     "Cine": "Cine",
     "Comedia": "Stand Up",
-    "Teatro_Familiar": "Familiar",
+    "Teatro_Familiar": "Familiar",      # type stays "Familiar"; category is now "Familia"
     "Teatro_Drama": "Drama",
     "Jazz": "Jazz",
     "Rock": "Rock",
@@ -266,6 +266,11 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
     if locked_category:
         event["category"] = locked_category
 
+    # Consume _category_hint (soft suggestion from scrapers like Passline/Evently).
+    # Only applied when no category has been determined yet and no lock is active.
+    # Pop so the hint never reaches the database.
+    category_hint: str | None = event.pop("_category_hint", None)
+
     # category and type — pick first match in priority order
     category: str | None = event.get("category") or None
     etype: str | None = event.get("type") or None
@@ -287,6 +292,10 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
             etype = _RULE_TO_TYPE.get(rule)
         if category is not None and etype is not None:
             break
+
+    # If keyword matching produced no category, fall back to the scraper's hint
+    if category is None and category_hint and not locked_category:
+        category = category_hint
 
     if category is not None:
         event["category"] = category

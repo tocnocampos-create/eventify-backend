@@ -24,8 +24,15 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scrapers import classifier, deduplicator, enricher
+from scrapers.base_scraper import BaseScraper, _get_database_url
+from scrapers.cinemark_scraper import CinemarkScraper
+from scrapers.evently_scraper import EventlyScraper
+from scrapers.cinepolis_scraper import CinepolisScraper
+from scrapers.passline_scraper import PasslineScraper
+from scrapers.portaldisc_scraper import PortalDiscScraper
 from scrapers.puntoticket_scraper import PuntoTicketScraper
-from scrapers.base_scraper import _get_database_url
+from scrapers.ticketmaster_scraper import TicketmasterScraper
+from scrapers.ticketplus_scraper import TicketPlusScraper
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -41,7 +48,7 @@ logger = logging.getLogger("run_all")
 # ── Pipeline helpers ─────────────────────────────────────────────────────────
 
 def _run_pipeline(
-    scraper: PuntoTicketScraper,
+    scraper: BaseScraper,
     db,
     dry_run: bool = False,
     verbose: bool = False,
@@ -157,8 +164,13 @@ def main() -> None:
 
     scrapers = [
         PuntoTicketScraper(max_pages=args.max_pages, max_events=args.max_events),
-        # Add more scrapers here as they are implemented:
-        # FoobarScraper(),
+        CinemarkScraper(max_events=args.max_events),
+        CinepolisScraper(max_events=args.max_events),
+        PasslineScraper(max_events=args.max_events),
+        TicketPlusScraper(max_pages=args.max_pages, max_events=args.max_events),
+        TicketmasterScraper(max_pages=args.max_pages, max_events=args.max_events),
+        EventlyScraper(max_pages=args.max_pages, max_events=args.max_events),
+        PortalDiscScraper(max_pages=args.max_pages, max_events=args.max_events),
     ]
 
     with Session() as db:

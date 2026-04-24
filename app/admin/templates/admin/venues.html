@@ -1,0 +1,150 @@
+{% extends "admin/base.html" %}
+{% block title %}Venues{% endblock %}
+{% block heading %}Venues{% endblock %}
+
+{% block content %}
+<!-- Filters -->
+<form method="get" class="flex flex-wrap gap-3 mb-6 items-end">
+  <div>
+    <label class="block text-xs text-gray-400 mb-1">Venue type</label>
+    <select name="type" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white">
+      <option value="">All types</option>
+      {% for t in venue_types %}
+      <option value="{{ t }}" {% if filters.type == t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="block text-xs text-gray-400 mb-1">Auto-created only</label>
+    <select name="auto_created" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white">
+      <option value="">All</option>
+      <option value="1" {% if filters.auto_created == '1' %}selected{% endif %}>Auto-created</option>
+      <option value="0" {% if filters.auto_created == '0' %}selected{% endif %}>Manual / seeded</option>
+    </select>
+  </div>
+  <button type="submit" class="bg-purple-700 hover:bg-purple-600 text-white text-sm px-4 py-1.5 rounded-lg">Filter</button>
+  <a href="/admin/venues" class="text-gray-400 text-sm py-1.5">Clear</a>
+  <span class="ml-auto text-gray-500 text-sm self-end">{{ total }} venues</span>
+</form>
+
+<!-- Table -->
+<div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-800 text-gray-400 text-xs uppercase tracking-wider">
+      <tr>
+        <th class="px-4 py-3 text-left">ID</th>
+        <th class="px-4 py-3 text-left">Name</th>
+        <th class="px-4 py-3 text-left">Type</th>
+        <th class="px-4 py-3 text-left">Coords</th>
+        <th class="px-4 py-3 text-center">Auto?</th>
+        <th class="px-4 py-3 text-right">Events</th>
+        <th class="px-4 py-3 text-center">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-800">
+      {% for v in venues %}
+      <tr id="venue-row-{{ v.id }}" class="hover:bg-gray-800/50 transition-colors">
+        <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ v.id }}</td>
+        <td class="px-4 py-3 text-white font-medium">
+          {{ v.name }}
+          {% if v.website_url %}
+          <a href="{{ v.website_url }}" target="_blank" class="ml-1 text-gray-500 hover:text-purple-400">↗</a>
+          {% endif %}
+        </td>
+        <td class="px-4 py-3">
+          <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-800 text-gray-300">{{ v.venue_type }}</span>
+        </td>
+        <td class="px-4 py-3 font-mono text-xs text-gray-400">
+          {% if v.coordinates %}
+            {{ "%.4f"|format(v.coordinates[0]) }}, {{ "%.4f"|format(v.coordinates[1]) }}
+            {% if v.is_plaza_armas %}
+            <span class="ml-1 text-yellow-500" title="Plaza de Armas placeholder">⚠</span>
+            {% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td class="px-4 py-3 text-center">
+          {% if v.is_auto_created %}
+          <span class="px-2 py-0.5 rounded-full text-xs bg-orange-900 text-orange-300">auto</span>
+          {% else %}
+          <span class="px-2 py-0.5 rounded-full text-xs bg-gray-800 text-gray-500">seeded</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-3 text-right font-mono text-gray-400">{{ v.event_count }}</td>
+        <td class="px-4 py-3 text-center">
+          <button onclick="toggleEdit({{ v.id }})"
+                  class="text-xs text-purple-400 hover:text-purple-300 font-medium">Edit</button>
+        </td>
+      </tr>
+
+      <!-- Inline edit form -->
+      <tr id="venue-edit-{{ v.id }}" class="hidden bg-gray-900">
+        <td colspan="7" class="px-4 py-4">
+          <form method="post" action="/admin/venues/{{ v.id }}"
+                class="grid grid-cols-2 lg:grid-cols-3 gap-3 items-end">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Name</label>
+              <input name="name" value="{{ v.name }}"
+                     class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Venue type</label>
+              <select name="venue_type" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white">
+                {% for t in venue_types %}
+                <option value="{{ t }}" {% if v.venue_type == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Latitude</label>
+              <input name="lat" value="{{ v.coordinates[0] if v.coordinates else '' }}" type="number" step="0.0001"
+                     class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Longitude</label>
+              <input name="lng" value="{{ v.coordinates[1] if v.coordinates else '' }}" type="number" step="0.0001"
+                     class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Cover image URL</label>
+              <input name="cover_image_url" value="{{ v.cover_image_url or '' }}"
+                     class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Website URL</label>
+              <input name="website_url" value="{{ v.website_url or '' }}"
+                     class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white">
+            </div>
+            <div class="col-span-2 lg:col-span-3 flex gap-2 mt-1">
+              <button type="submit"
+                      class="bg-purple-700 hover:bg-purple-600 text-white text-sm px-4 py-1.5 rounded-lg">Save</button>
+              <button type="button" onclick="toggleEdit({{ v.id }})"
+                      class="text-gray-400 text-sm px-4 py-1.5">Cancel</button>
+            </div>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="flex gap-2 mt-4 justify-center">
+  {% for p in range(1, total_pages + 1) %}
+  <a href="?page={{ p }}&type={{ filters.type }}&auto_created={{ filters.auto_created }}"
+     class="px-3 py-1.5 rounded-lg text-sm
+            {% if p == page %}bg-purple-700 text-white{% else %}bg-gray-800 text-gray-400 hover:bg-gray-700{% endif %}">
+    {{ p }}
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+function toggleEdit(id) {
+  const row = document.getElementById('venue-edit-' + id);
+  row.classList.toggle('hidden');
+}
+</script>
+{% endblock %}

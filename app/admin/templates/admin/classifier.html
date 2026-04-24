@@ -1,0 +1,132 @@
+{% extends "admin/base.html" %}
+{% block title %}Classifier Tester{% endblock %}
+{% block heading %}Classifier Tester{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  <!-- Input form -->
+  <div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+    <h2 class="font-semibold text-white mb-4">Test event classification</h2>
+    <form method="post" action="/admin/classifier" class="space-y-4">
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">Event title <span class="text-red-400">*</span></label>
+        <input name="name" value="{{ form.name }}" required
+               placeholder="e.g. Los Bunkers — Estadio Nacional"
+               class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">Description</label>
+        <textarea name="description" rows="4"
+                  placeholder="Optional event description…"
+                  class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none resize-none">{{ form.description }}</textarea>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">Venue type <span class="text-gray-600">(optional)</span></label>
+        <input name="venue_type" value="{{ form.venue_type }}"
+               placeholder="e.g. Sala de Concierto, Teatro, Bar…"
+               class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">Category hint <span class="text-gray-600">(soft, from scraper)</span></label>
+        <input name="category_hint" value="{{ form.category_hint }}"
+               placeholder="e.g. Música, Teatro…"
+               class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">Locked category <span class="text-gray-600">(hard override)</span></label>
+        <input name="locked_category" value="{{ form.locked_category }}"
+               placeholder="e.g. Cine (locks category regardless of rules)"
+               class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none">
+      </div>
+      <button type="submit"
+              class="w-full bg-purple-700 hover:bg-purple-600 text-white text-sm px-4 py-2 rounded-lg font-medium">
+        Classify
+      </button>
+    </form>
+  </div>
+
+  <!-- Results -->
+  <div class="bg-gray-900 rounded-xl border border-gray-800 p-6">
+    <h2 class="font-semibold text-white mb-4">Result</h2>
+    {% if result %}
+    <div class="space-y-4">
+      <div class="grid grid-cols-2 gap-3">
+        <div class="bg-gray-800 rounded-lg p-3">
+          <div class="text-xs text-gray-400 mb-1">Category</div>
+          {% if result.category %}
+          <div class="text-lg font-bold text-purple-400">{{ result.category }}</div>
+          {% else %}
+          <div class="text-lg font-bold text-red-400">None</div>
+          {% endif %}
+        </div>
+        <div class="bg-gray-800 rounded-lg p-3">
+          <div class="text-xs text-gray-400 mb-1">Type</div>
+          <div class="text-lg font-bold text-white">{{ result.type or '—' }}</div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-3">
+          <div class="text-xs text-gray-400 mb-1">Kids friendly</div>
+          <div class="text-lg font-bold {% if result.kids_friendly %}text-green-400{% else %}text-gray-500{% endif %}">
+            {{ 'Yes' if result.kids_friendly else 'No' }}
+          </div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-3">
+          <div class="text-xs text-gray-400 mb-1">Category source</div>
+          <div class="text-sm font-medium
+            {% if result.source == 'locked' %}text-red-400
+            {% elif result.source == 'hint' %}text-yellow-400
+            {% elif result.source == 'rule' %}text-green-400
+            {% else %}text-gray-500{% endif %}">
+            {{ result.source or '—' }}
+          </div>
+        </div>
+      </div>
+
+      {% if result.keywords %}
+      <div>
+        <div class="text-xs text-gray-400 mb-2">Keywords matched</div>
+        <div class="flex flex-wrap gap-1.5">
+          {% for kw in result.keywords %}
+          <span class="px-2 py-0.5 rounded-full text-xs bg-gray-800 text-gray-300">{{ kw }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <div>
+        <div class="text-xs text-gray-400 mb-2">Full output dict</div>
+        <pre class="bg-gray-950 rounded-lg p-3 text-xs text-green-300 overflow-auto max-h-48">{{ result.raw_json }}</pre>
+      </div>
+    </div>
+    {% else %}
+    <div class="text-gray-500 text-sm">Fill in the form and click Classify to see results.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Rules reference -->
+<div class="mt-6 bg-gray-900 rounded-xl border border-gray-800 p-5">
+  <h2 class="font-semibold text-white mb-4">Active classification rules</h2>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="text-gray-400 text-xs uppercase tracking-wider border-b border-gray-800">
+        <tr>
+          <th class="pb-2 text-left">Rule</th>
+          <th class="pb-2 text-left">→ Category</th>
+          <th class="pb-2 text-left">→ Type</th>
+          <th class="pb-2 text-left">Keywords</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800">
+        {% for rule in rules %}
+        <tr class="text-xs">
+          <td class="py-2 font-mono text-purple-400">{{ rule.name }}</td>
+          <td class="py-2 text-white">{{ rule.category }}</td>
+          <td class="py-2 text-gray-400">{{ rule.type }}</td>
+          <td class="py-2 text-gray-500 max-w-sm">{{ rule.keywords[:6]|join(', ') }}{% if rule.keywords|length > 6 %}, …{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

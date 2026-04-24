@@ -1,5 +1,5 @@
 """Neighborhood API endpoints."""
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.db.base import get_db
@@ -11,7 +11,7 @@ from app.models.schemas import (
 )
 from app.services.neighborhood_service import NeighborhoodService
 from app.services.venue_service import VenueService
-from app.api.dependencies import get_current_user, get_admin_user
+from app.api.dependencies import get_current_user, get_optional_current_user, get_admin_user
 
 router = APIRouter(prefix="/neighborhoods", tags=["neighborhoods"])
 
@@ -21,7 +21,7 @@ async def get_neighborhoods(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """Get all neighborhoods with pagination."""
     neighborhoods = NeighborhoodService.get_neighborhoods(db, skip=skip, limit=limit)

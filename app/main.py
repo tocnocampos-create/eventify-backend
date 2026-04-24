@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.models.schemas import HealthResponse
 from app.config import settings
 from app.api.router import api_router
+from app.admin.router import router as admin_router
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,6 +35,9 @@ app.add_middleware(
 
 # Include API routers
 app.include_router(api_router, prefix="/api")
+
+# Admin panel
+app.include_router(admin_router, prefix="/admin")
 
 
 @app.get("/")

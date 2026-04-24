@@ -3,10 +3,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.db.base import get_db
-from app.db.models import User
 from app.models.schemas import SearchResponse
 from app.services.search_service import SearchService, SearchFilters, ReturnType
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_optional_current_user
+from app.db.models import User
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -28,7 +28,7 @@ async def search(
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return per entity type"),
     return_type: ReturnType = Query(ReturnType.BOTH, description="What to return: 'both', 'events', or 'venues'"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ) -> SearchResponse:
     """
     Search venues and events by various filters.
