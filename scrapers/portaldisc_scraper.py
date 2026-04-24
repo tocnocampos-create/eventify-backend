@@ -97,6 +97,8 @@ def _abs(href: str) -> str:
 
 def _is_event_href(href: str) -> bool:
     """Return True if href looks like a PortalDisc event detail URL."""
+    if not href:
+        return False
     return bool(re.search(
         r"/(evento|eventos|detalle_evento|ver_evento|ticket|event)/",
         href, re.IGNORECASE,
@@ -105,6 +107,8 @@ def _is_event_href(href: str) -> bool:
 
 def _is_cartelera_href(href: str) -> bool:
     """Return True if href looks like a PortalDisc venue cartelera URL."""
+    if not href:
+        return False
     return bool(re.search(r"/cartelera/", href, re.IGNORECASE))
 
 

@@ -31,6 +31,7 @@ import sys
 import time
 from datetime import datetime
 from typing import Any
+from urllib.parse import urljoin
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -75,12 +76,12 @@ REQUEST_DELAY = 2  # seconds between requests
 
 # ── URL helpers ───────────────────────────────────────────────────────────────
 
-def _absolute_url(href: str) -> str:
-    if href.startswith("http"):
-        return href
+def _absolute_url(href: str, page_url: str = BASE_URL) -> str:
     if href.startswith("//"):
         return "https:" + href
-    return BASE_URL + href if href.startswith("/") else href
+    if href.startswith("http"):
+        return href
+    return urljoin(page_url, href)
 
 
 def _is_event_url(href: str) -> bool:
@@ -265,6 +266,9 @@ class TicketmasterScraper(BaseScraper):
         if not href or href in ("#", "javascript:void(0)"):
             return None
         full_url = _absolute_url(href)
+        # If still relative (no scheme), can't use — skip
+        if not full_url.startswith("http"):
+            return None
         event["url"] = full_url
         event["source_url"] = full_url
 
@@ -584,7 +588,7 @@ class TicketmasterScraper(BaseScraper):
         # rel="next" — most reliable
         link = soup.find("a", rel=lambda v: v and "next" in v)
         if link and link.get("href"):
-            return _absolute_url(link["href"])
+            return _absolute_url(link["href"], current_url)
 
         # class-based "Next" / "Siguiente" link
         link = (
@@ -594,7 +598,7 @@ class TicketmasterScraper(BaseScraper):
         if link and link.get("href"):
             href = link["href"]
             if href not in ("#", "javascript:void(0)"):
-                return _absolute_url(href)
+                return _absolute_url(href, current_url)
 
         # ?page=N increment: find current page number and bump it
         m = re.search(r"[?&]page=(\d+)", current_url)
