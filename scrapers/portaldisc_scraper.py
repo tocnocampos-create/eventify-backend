@@ -41,6 +41,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from datetime import datetime
 from typing import Any
 
@@ -138,6 +139,20 @@ def _pagination_url(base: str, page: int) -> str:
             return re.sub(pattern, lambda m: m.group(1) + str(page), base)
     sep = "&" if "?" in base else "?"
     return f"{base}{sep}pagina={page}"
+
+
+# ── Text normalisation helpers ────────────────────────────────────────────────
+
+def _strip_accents(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def _slug_norm(s: str) -> str:
+    """Lowercase + strip accents + remove all non-alpha chars."""
+    return re.sub(r"[^a-z]", "", _strip_accents(s.lower()))
 
 
 # ── Date / time parsing ───────────────────────────────────────────────────────
@@ -238,6 +253,8 @@ class PortalDiscScraper(BaseScraper):
         self.strategy   = strategy
         self.session    = requests.Session()
         self.session.headers.update(HEADERS)
+        # Normalised DB venue names for fuzzy slug matching (loaded at fetch time)
+        self._db_venue_norms: list[str] = []
 
     # ── HTTP ──────────────────────────────────────────────────────────────────
 
@@ -249,6 +266,44 @@ class PortalDiscScraper(BaseScraper):
         except requests.RequestException as exc:
             logger.error("[portaldisc] GET %s failed: %s", url, exc)
             return None
+
+    # ── DB venue fuzzy matching ───────────────────────────────────────────────
+
+    def _load_db_venues(self) -> None:
+        """Load normalised venue names from DB for slug fuzzy matching."""
+        try:
+            from sqlalchemy import create_engine, text
+            from scrapers.base_scraper import _get_database_url
+            engine = create_engine(_get_database_url(), pool_pre_ping=True)
+            with engine.connect() as conn:
+                rows = conn.execute(text("SELECT name FROM venues")).fetchall()
+            engine.dispose()
+            self._db_venue_norms = [_slug_norm(r[0]) for r in rows if r[0]]
+            logger.info(
+                "[portaldisc] loaded %d DB venue names for fuzzy matching",
+                len(self._db_venue_norms),
+            )
+        except Exception as exc:
+            logger.warning("[portaldisc] could not load DB venues: %s", exc)
+
+    def _matches_db_venue(self, name: str) -> bool:
+        """Return True if *name* fuzzy-matches any known DB venue (all Santiago).
+
+        Matching rule: after normalising both strings (lowercase, strip accents,
+        remove non-alpha), one must be a substring of the other, with a minimum
+        length of 6 chars to avoid false positives from short words.
+        """
+        if not self._db_venue_norms or not name:
+            return False
+        norm = _slug_norm(name)
+        if len(norm) < 4:
+            return False
+        for db_norm in self._db_venue_norms:
+            if len(db_norm) < 6:
+                continue
+            if db_norm in norm or norm in db_norm:
+                return True
+        return False
 
     # ══════════════════════════════════════════════════════════════════════════
     # Strategy A — lista_eventos
@@ -471,21 +526,48 @@ class PortalDiscScraper(BaseScraper):
                 if ev["source_url"] in seen:
                     continue
 
-                # Santiago filter using venue_name + _city + name
-                location_hint = " ".join(
+                # ── Early reject: explicit non-Santiago city in stub ──────────
+                # Only skip when we have a city field that is clearly NOT Santiago.
+                # If city is absent (most cards) we proceed optimistically and
+                # defer the full check to after the detail page is fetched.
+                explicit_city = (ev.get("_city") or "").strip()
+                stub_hint = " ".join(
                     str(ev.get(f, "") or "") for f in ("venue_name", "_city", "name")
                 )
-                if not _is_santiago(location_hint):
+                if (
+                    explicit_city
+                    and not _is_santiago(explicit_city)
+                    and not self._matches_db_venue(ev.get("venue_name") or "")
+                ):
                     continue
 
-                # Fetch detail page when key fields are missing
-                if not ev.get("date") or not ev.get("description") or not ev.get("image_url"):
+                # ── Fetch detail page for full address + missing fields ────────
+                # Always fetch when stub lacks location info so the deferred
+                # Santiago check below has the address field available.
+                needs_detail = (
+                    not ev.get("date")
+                    or not ev.get("description")
+                    or not ev.get("image_url")
+                    or not _is_santiago(stub_hint)
+                )
+                if needs_detail:
                     detail = self.fetch_event_detail(ev["url"])
                     for k, v in detail.items():
                         ev.setdefault(k, v)
 
                 if not ev.get("date"):
                     logger.debug("[portaldisc/lista] No date for %r — skipping", ev.get("name"))
+                    continue
+
+                # ── Deferred Santiago check using full address ─────────────────
+                full_hint = " ".join(
+                    str(ev.get(f, "") or "") for f in ("venue_name", "_city", "name", "address")
+                )
+                if not _is_santiago(full_hint) and not self._matches_db_venue(ev.get("venue_name") or ""):
+                    logger.debug(
+                        "[portaldisc/lista] Non-Santiago after detail fetch %r — skipping",
+                        ev.get("name"),
+                    )
                     continue
 
                 ev.pop("_city", None)
@@ -546,11 +628,15 @@ class PortalDiscScraper(BaseScraper):
 
             venue_name = a.get_text(strip=True) or slug.replace("-", " ").title()
 
-            # Santiago filter on venue name (address comes from cartelera page)
+            # Santiago filter: explicit token match OR DB fuzzy match.
+            # Slug-based names like "teatromunicipaldelaflorida" don't contain
+            # space-separated Santiago tokens, so we also compare the normalised
+            # slug against normalised DB venue names (all DB venues are Santiago).
             location_hint = venue_name + " " + slug.replace("-", " ")
-            if not _is_santiago(location_hint):
+            if not _is_santiago(location_hint) and not self._matches_db_venue(slug) and not self._matches_db_venue(venue_name):
                 logger.debug(
-                    "[portaldisc/cartelera] Skipping non-Santiago venue %r", venue_name
+                    "[portaldisc/cartelera] Skipping %r — not Santiago and no DB match",
+                    venue_name,
                 )
                 continue
 
@@ -948,6 +1034,8 @@ class PortalDiscScraper(BaseScraper):
         Shared `seen` set prevents double-processing events found by both
         lista_eventos and a venue cartelera page.
         """
+        self._load_db_venues()
+
         seen:   set[str]        = set()
         events: list[dict[str, Any]] = []
 
