@@ -628,18 +628,7 @@ class PortalDiscScraper(BaseScraper):
 
             venue_name = a.get_text(strip=True) or slug.replace("-", " ").title()
 
-            # Santiago filter: explicit token match OR DB fuzzy match.
-            # Slug-based names like "teatromunicipaldelaflorida" don't contain
-            # space-separated Santiago tokens, so we also compare the normalised
-            # slug against normalised DB venue names (all DB venues are Santiago).
-            location_hint = venue_name + " " + slug.replace("-", " ")
-            if not _is_santiago(location_hint) and not self._matches_db_venue(slug) and not self._matches_db_venue(venue_name):
-                logger.debug(
-                    "[portaldisc/cartelera] Skipping %r — not Santiago and no DB match",
-                    venue_name,
-                )
-                continue
-
+            # All ~22 portaltickets partner venues are Santiago/RM — accept all.
             seen_slugs.add(slug)
             results.append((slug, venue_name))
             logger.debug(

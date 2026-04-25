@@ -82,6 +82,8 @@ SANTIAGO_TOKENS = {
     "parque padre hurtado", "movistar arena", "estadio nacional",
     "teatro caupolicán", "caupolican", "centro gam", "matucana",
     "espacio riesco", "club chocolate", "blondie",
+    # Additional venue tokens
+    "egana", "usach", "florinda", "lacasaenelaire", "scdegana", "aulamagna",
 }
 
 # ── Spanish month lookup ──────────────────────────────────────────────────────

@@ -95,14 +95,16 @@ def _run_pipeline(
         ev.setdefault("scraped_at", now)
         ev.setdefault("is_verified", False)
         try:
+            # Use a savepoint so a per-event failure only rolls back that
+            # event, not all previously successful inserts in the batch.
+            sp = db.begin_nested()
             result = deduplicator.save_or_update(ev, db)
-            # Flush immediately so any constraint violation is caught
-            # per-event rather than rolling back the whole batch at commit.
             db.flush()
+            sp.commit()
             stats[result] += 1
         except Exception as exc:
             logger.warning("Save failed for %r: %s", ev.get("name"), exc)
-            db.rollback()
+            sp.rollback()
             stats["failed"] += 1
 
     db.commit()

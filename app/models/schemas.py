@@ -225,9 +225,8 @@ class ForgotPasswordRequest(BaseModel):
 
 
 class ForgotPasswordResponse(BaseModel):
-    """Forgot password response schema (MVP: code returned directly)."""
+    """Forgot password response schema."""
     message: str
-    code: str
 
 
 class ResetPasswordRequest(BaseModel):
