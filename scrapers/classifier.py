@@ -4,16 +4,30 @@ Uses the same keyword rules already present in
 scripts/populate_keywords.py.  Given an event dict with name,
 description, venue_name, and (optionally) venue_type, assigns:
 
-    category    – one of: Música, Teatro, Comedia, Arte, Cine
+    category    – one of: Música, Teatro, Comedia, Arte, Cine, Familia, Vida Nocturna
     type        – subtype string (Jazz, Rock, Electrónica, …)
     keywords    – list[str] built from every matching rule
     kids_friendly – True when Teatro_Familiar keywords fire
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
-# ── Keyword rules (kept identical to scripts/populate_keywords.py) ─────────
+# ── Keyword rules ─────────────────────────────────────────────────────────────
+# v3 changes vs v2:
+#  - _match_rules now uses word-boundary matching for single-word keywords,
+#    preventing "arte" from matching "cuarteto"/"Martes", "obra" from matching
+#    "obras", "escena" from matching "escenarios", "musical" from "musicales".
+#  - Teatro_Drama: removed "musical" (adjective in music descriptions) and
+#                  "escena" (→ "escena nacional", "escenarios")
+#  - Teatro_Familiar: removed "magia" (→ "la magia de X"); added "show de magia"
+#  - Comedia: removed "improvisación" (→ jazz improvisation descriptions)
+#  - Cine: removed "proyección" (→ "proyección internacional" = reach/scope);
+#          added "proyección de cine"
+#  - Museo: removed "historia" (→ "mi historia musical", event story descriptions)
+#  - Feria: removed standalone "mercado" (→ venue names like "Mercado París
+#           Londres"); kept only compound forms
 
 KEYWORD_RULES: dict[str, list[str]] = {
     "Folclore": [
@@ -29,8 +43,8 @@ KEYWORD_RULES: dict[str, list[str]] = {
     ],
     "Electrónica": [
         "electrónica", "DJ", "dj set", "techno", "house",
-        "minimal", "after", "club", "boliche", "antro", "disco", "fiesta",
-        "nocturno", "after hours", "trap", "perreo",
+        "minimal", "boliche", "disco", "after hours",
+        "trap", "perreo",
     ],
     "Jazz": [
         "jazz", "blues", "swing", "bossa nova", "jazz fusión",
@@ -44,23 +58,26 @@ KEYWORD_RULES: dict[str, list[str]] = {
     "Pop": ["pop", "música en vivo", "pop rock", "pop latino"],
     "Indie": ["indie", "alternativo", "indie rock", "post rock", "experimental"],
     "Vida Nocturna": [
-        "vida nocturna", "noche", "nocturno", "after",
-        "club", "boliche", "DJ", "fiesta", "open bar", "VIP",
+        "vida nocturna", "open bar", "VIP",
+        "4 pistas de baile", "pista de baile",
     ],
     "Teatro_Familiar": [
         "familiar", "infantil", "niños", "kids",
         "familia", "teatro infantil", "circo", "títeres", "marionetas",
-        "magia", "show infantil", "todas las edades", "apto para niños",
+        "show de magia", "ilusionismo", "show infantil", "todas las edades",
+        "apto para niños", "show familiar", "para toda la familia",
+        "espectáculo infantil",
     ],
     "Teatro_Drama": [
-        "teatro", "obra", "dramaturgia", "escena",
-        "actuación", "puesta en escena", "drama", "tragicomedia",
-        "monólogo", "performance",
+        "obra de teatro", "obra teatral", "obra",
+        "dramaturgia", "actuación", "puesta en escena",
+        "drama", "tragicomedia", "monólogo", "danza", "ballet",
     ],
     "Comedia": [
         "comedia", "stand up", "stand-up", "humor",
         "comediante", "show de humor", "comedia en vivo",
-        "improvisación", "impro", "sketch",
+        "improvisación", "impro", "sketch", "comedy",
+        "open mic", "humorada", "cómico", "cómica",
     ],
     "Arte": [
         "arte", "exposición", "galería", "museo", "cultura",
@@ -69,22 +86,22 @@ KEYWORD_RULES: dict[str, list[str]] = {
         "inauguración",
     ],
     "Cine": [
-        "cine", "película", "film", "proyección", "cineclube",
+        "cine", "película", "film", "cineclube",
         "ciclo de cine", "cortometraje", "documental", "estreno",
-        "cine arte", "cine mudo",
+        "cine arte", "cine mudo", "proyección de cine", "sesión de cine",
     ],
     "Sunset": [
         "sunset", "atardecer", "happy hour", "after office",
         "cóctel", "terraza", "rooftop", "vista panorámica", "sundowner",
     ],
     "Feria": [
-        "feria", "mercado", "feria artesanal",
-        "mercado de pulgas", "feria de diseño", "bazar",
+        "feria", "mercado de pulgas", "feria artesanal",
+        "mercado artesanal", "feria de diseño", "bazar",
         "feria gastronómica", "food market",
     ],
     "Aire_Libre": [
         "aire libre", "outdoor", "parque", "plaza",
-        "festival", "al fresco", "jardín", "terraza", "rooftop",
+        "al fresco", "jardín",
         "anfiteatro", "exterior", "naturaleza",
     ],
     "Barrios": [
@@ -94,48 +111,78 @@ KEYWORD_RULES: dict[str, list[str]] = {
         "patrimonio", "ruta cultural",
     ],
     "City_Tour": [
-        "city tour", "tour", "patrimonio", "historia",
-        "turismo", "visita guiada", "centro histórico",
-        "santiago histórico", "ruta patrimonial",
+        "city tour", "patrimonio", "turismo", "visita guiada",
+        "centro histórico", "santiago histórico", "ruta patrimonial",
         "cerro santa lucía", "plaza de armas", "la moneda",
     ],
     "Museo": [
         "museo", "colección", "exposición permanente",
-        "arqueología", "historia", "arte precolombino", "memorial",
+        "arqueología", "arte precolombino", "memorial",
         "archivo histórico",
     ],
 }
 
-# Pre-built lowercase lookup
-_RULES_LOWER: list[tuple[str, list[str]]] = [
-    (rule, [kw.lower() for kw in kws])
+# Pre-built lowercase lookup — each keyword stored as (text, is_single_word)
+_RULES_LOWER: list[tuple[str, list[tuple[str, bool]]]] = [
+    (
+        rule,
+        [(kw.lower(), " " not in kw.lower()) for kw in kws],
+    )
     for rule, kws in KEYWORD_RULES.items()
 ]
 
-# Venue-type → rule mapping (same as populate_keywords.py)
+# Compiled word-boundary patterns cache
+_WB_CACHE: dict[str, re.Pattern] = {}
+
+
+def _wb(kw: str) -> re.Pattern:
+    """Return a compiled word-boundary pattern for a single-word keyword."""
+    if kw not in _WB_CACHE:
+        _WB_CACHE[kw] = re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE | re.UNICODE)
+    return _WB_CACHE[kw]
+
+
+# ── Venue-type → rule (hard signal, always applied) ───────────────────────────
+# "museo" kept — venues typed as Museo strongly suggest art/museum content.
+# "arena", "club", "bar" moved to VENUE_TYPE_FALLBACK (applied only when
+# keyword classification yields no category), preventing venue type from
+# overriding explicit music keyword signals.
 VENUE_TYPE_RULES: dict[str, str] = {
-    "club": "Vida Nocturna",
-    "bar": "Vida Nocturna",
     "museo": "Museo",
-    "arena": "Aire_Libre",
+}
+
+# ── Venue-type → category (soft fallback, only when keywords yield nothing) ───
+VENUE_TYPE_FALLBACK: dict[str, tuple[str, str | None]] = {
+    "club":              ("Vida Nocturna", "Vida Nocturna"),
+    "bar":               ("Vida Nocturna", "Vida Nocturna"),
+    "arena":             ("Música",        None),
+    "sala de concierto": ("Música",        None),
+}
+
+# ── Known venue name → locked category ────────────────────────────────────────
+# Substring match (lowercase) on venue_name. Applied as a hard override.
+LOCKED_VENUE_CATEGORIES: dict[str, str] = {
+    "teatro municipal":         "Teatro",
+    "movistar arena":           "Música",
+    "estadio nacional":         "Música",
+    "estadio bicentenario":     "Música",
+    "estadio monumental":       "Música",
+    "estadio san carlos":       "Música",
 }
 
 # ── Category / type mapping ───────────────────────────────────────────────────
-# Priority order: more specific rules override generic ones.
-# First rule that matches (in this order) wins for category / type.
-
 _RULE_PRIORITY: list[str] = [
     "Cine",
+    "Jazz",           # before Comedia: "jazz + improvisación" → Jazz wins over improv-comedy
     "Comedia",
     "Teatro_Familiar",
     "Teatro_Drama",
-    "Jazz",
     "Rock",
     "Pop",
     "Indie",
     "Folclore",
     "Latina",
-    "Electrónica",   # after named genres so Rock/Jazz/Pop win over DJ for live music
+    "Electrónica",
     "Arte",
     "Museo",
     "Vida Nocturna",
@@ -147,61 +194,74 @@ _RULE_PRIORITY: list[str] = [
 ]
 
 _RULE_TO_CATEGORY: dict[str, str] = {
-    "Cine":           "Cine",
-    "Comedia":        "Comedia",
-    "Teatro_Familiar": "Familia",        # Familia is the correct standard category
-    "Teatro_Drama":   "Teatro",
-    "Jazz":           "Música",
-    "Rock":           "Música",
-    "Pop":            "Música",
-    "Indie":          "Música",
-    "Electrónica":    "Vida Nocturna",   # DJ/club events → Vida Nocturna, not Música
-    "Folclore":       "Música",
-    "Latina":         "Música",
-    "Arte":           "Arte",
-    "Museo":          "Arte",
-    "Vida Nocturna":  "Vida Nocturna",   # was incorrectly "Música"
-    "Sunset":         "Vida Nocturna",   # happy hour / rooftop → nightlife
-    "Feria":          "Arte",
-    "Aire_Libre":     None,
-    "Barrios":        None,
-    "City_Tour":      None,
+    "Cine":            "Cine",
+    "Comedia":         "Comedia",
+    "Teatro_Familiar": "Familia",
+    "Teatro_Drama":    "Teatro",
+    "Jazz":            "Música",
+    "Rock":            "Música",
+    "Pop":             "Música",
+    "Indie":           "Música",
+    "Electrónica":     "Vida Nocturna",
+    "Folclore":        "Música",
+    "Latina":          "Música",
+    "Arte":            "Arte",
+    "Museo":           "Arte",
+    "Vida Nocturna":   "Vida Nocturna",
+    "Sunset":          "Vida Nocturna",
+    "Feria":           "Arte",
+    "Aire_Libre":      None,
+    "Barrios":         None,
+    "City_Tour":       None,
 }
 
 _RULE_TO_TYPE: dict[str, str] = {
-    "Cine": "Cine",
-    "Comedia": "Stand Up",
-    "Teatro_Familiar": "Familiar",      # type stays "Familiar"; category is now "Familia"
-    "Teatro_Drama": "Drama",
-    "Jazz": "Jazz",
-    "Rock": "Rock",
-    "Pop": "Pop",
-    "Indie": "Indie",
-    "Electrónica": "Electrónica",
-    "Folclore": "Folclore",
-    "Latina": "Latina",
-    "Arte": "Exposición",
-    "Museo": "Exposición",
-    "Vida Nocturna": "Vida Nocturna",
-    "Sunset": "Sunset",
-    "Feria": "Feria",
-    "Aire_Libre": "Aire Libre",
-    "Barrios": "Barrios",
-    "City_Tour": "City Tour",
+    "Cine":            "Cine",
+    "Comedia":         "Stand Up",
+    "Teatro_Familiar": "Familiar",
+    "Teatro_Drama":    "Drama",
+    "Jazz":            "Jazz",
+    "Rock":            "Rock",
+    "Pop":             "Pop",
+    "Indie":           "Indie",
+    "Electrónica":     "Electrónica",
+    "Folclore":        "Folclore",
+    "Latina":          "Latina",
+    "Arte":            "Exposición",
+    "Museo":           "Exposición",
+    "Vida Nocturna":   "Vida Nocturna",
+    "Sunset":          "Sunset",
+    "Feria":           "Feria",
+    "Aire_Libre":      "Aire Libre",
+    "Barrios":         "Barrios",
+    "City_Tour":       "City Tour",
 }
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def _match_rules(name: str, description: str, venue_type: str) -> set[str]:
-    """Return the set of rule names matched by the text fields."""
+    """Return the set of rule names matched by the text fields.
+
+    Single-word keywords use word-boundary matching to prevent false positives
+    like "arte" matching "cuarteto" or "Martes", "obra" matching "obras", etc.
+    Multi-word keywords use plain substring matching.
+    """
     combined = f"{name} {description}".lower()
     matched: set[str] = set()
 
-    for rule_name, kws_lower in _RULES_LOWER:
-        if any(kw in combined for kw in kws_lower):
-            matched.add(rule_name)
+    for rule_name, kw_pairs in _RULES_LOWER:
+        for kw, is_single_word in kw_pairs:
+            if is_single_word:
+                if _wb(kw).search(combined):
+                    matched.add(rule_name)
+                    break
+            else:
+                if kw in combined:
+                    matched.add(rule_name)
+                    break
 
+    # Hard venue-type rules (only "museo" now)
     venue_rule = VENUE_TYPE_RULES.get(venue_type.lower())
     if venue_rule:
         matched.add(venue_rule)
@@ -214,7 +274,7 @@ def build_keywords(
     description: str = "",
     venue_type: str = "",
 ) -> list[str]:
-    """Return a sorted, deduplicated keyword list (same logic as populate_keywords.py)."""
+    """Return a sorted, deduplicated keyword list."""
     matched = _match_rules(name, description, venue_type)
     kws: set[str] = set()
     for rule in matched:
@@ -230,20 +290,21 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
     Does NOT overwrite fields that already have a value unless
     the field is "keywords" (always recomputed).
 
-    When the scraper has set a "_locked_category" sentinel (e.g. because the
-    event came from the /musica or /teatro listing URL), that category is
-    treated as a hard override: it is always written to event["category"] and
-    only rule types whose _RULE_TO_CATEGORY matches it are considered, so a
-    Música event whose title contains words like "historia" or "fotografías"
-    will never receive type="Exposición".
+    Classification priority (highest → lowest):
+      1. _locked_category sentinel from scraper URL hint
+      2. LOCKED_VENUE_CATEGORIES match on venue_name
+      3. Keyword-based rules (KEYWORD_RULES via _RULE_PRIORITY)
+      4. VENUE_TYPE_FALLBACK (only when keywords yield no category)
+      5. _category_hint from scraper
 
     Args:
-        event: dict with at least "name".  Optional: "description",
-               "venue_type" (the resolved venue's type string).
+        event: dict with at least "name". Optional: "description",
+               "venue_type", "venue_name".
     """
     name = event.get("name") or ""
     description = event.get("description") or ""
     venue_type = event.get("venue_type") or ""
+    venue_name = event.get("venue_name") or ""
 
     matched = _match_rules(name, description, venue_type)
 
@@ -253,35 +314,37 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
         kws.update(KEYWORD_RULES[rule])
     event["keywords"] = sorted(kws)
 
-    # kids_friendly — set True when keywords match; never clear a True already
-    # set by the scraper (e.g. the /familia source-URL hint).
+    # kids_friendly
     if "Teatro_Familiar" in matched:
         event["kids_friendly"] = True
     elif not event.get("kids_friendly"):
         event["kids_friendly"] = False
 
-    # Honour source-URL category lock set by the scraper.
-    # Pop so the sentinel never reaches the database.
+    # Pop sentinels
     locked_category: str | None = event.pop("_locked_category", None)
-    if locked_category:
-        event["category"] = locked_category
-
-    # Consume _category_hint (soft suggestion from scrapers like Passline/Evently).
-    # Only applied when no category has been determined yet and no lock is active.
-    # Pop so the hint never reaches the database.
     category_hint: str | None = event.pop("_category_hint", None)
 
-    # category and type — pick first match in priority order
+    # --- Category resolution ---
     category: str | None = event.get("category") or None
     etype: str | None = event.get("type") or None
 
+    # 1. Scraper URL lock (highest priority)
+    if locked_category:
+        event["category"] = locked_category
+        category = locked_category
+
+    # 2. Known venue name lock (hard override when no scraper lock)
+    if not locked_category and venue_name:
+        vn_lower = venue_name.lower()
+        for substr, locked_cat in LOCKED_VENUE_CATEGORIES.items():
+            if substr in vn_lower:
+                category = locked_cat
+                break
+
+    # 3. Keyword-based classification
     for rule in _RULE_PRIORITY:
         if rule not in matched:
             continue
-        # When a category is locked, skip rules that would resolve to a
-        # different (or unrelated) category — they would produce a mismatched
-        # type (e.g. "Exposición" for a Música event whose title contains
-        # "historia" or "fotografías").
         if locked_category:
             rule_cat = _RULE_TO_CATEGORY.get(rule)
             if rule_cat != locked_category:
@@ -293,7 +356,15 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
         if category is not None and etype is not None:
             break
 
-    # If keyword matching produced no category, fall back to the scraper's hint
+    # 4. Venue-type fallback — only when keywords produced no category yet
+    if category is None and not locked_category:
+        fallback = VENUE_TYPE_FALLBACK.get(venue_type.lower())
+        if fallback:
+            category = fallback[0]
+            if etype is None and fallback[1] is not None:
+                etype = fallback[1]
+
+    # 5. Scraper category hint (last resort)
     if category is None and category_hint and not locked_category:
         category = category_hint
 
