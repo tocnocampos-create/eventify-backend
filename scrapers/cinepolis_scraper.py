@@ -159,17 +159,32 @@ def _get_cinemas(parsed: Any) -> list[dict]:
 
 
 def _parse_showtime_date(raw: str) -> str | None:
-    """Parse ShowtimeDate to YYYY-MM-DD.
+    """Parse a date value to YYYY-MM-DD.
 
-    Accepts:
-      - "Miércoles 23 de Abril de 2026"
-      - "23 de abril"         (year defaults to current)
-      - "2026-04-23"          (already ISO)
-      - "23/04/2026"
+    Accepts (in priority order):
+      - "/Date(1777183200000)/"  Unix ms timestamp (FilterDate field)
+      - "2026-04-23"             already ISO
+      - "23/04/2026"             slash format
+      - "Miércoles 23 de Abril de 2026"  Spanish prose with "de"
+      - "23 de abril"            year defaults to current
+      - "26 abril"               no "de" separator (current API format)
     """
     if not raw:
         return None
-    s = raw.strip().lower()
+    s = raw.strip()
+
+    # Unix ms timestamp: "/Date(1777183200000)/"
+    m = re.search(r"/[Dd]ate\((\d+)\)/", s)
+    if m:
+        from datetime import timezone as _tz
+        ts = int(m.group(1)) / 1000
+        try:
+            dt = datetime.fromtimestamp(ts, tz=_tz.utc)
+            return dt.strftime("%Y-%m-%d")
+        except (OSError, OverflowError, ValueError):
+            pass
+
+    s = s.lower()
 
     # Already ISO
     m = re.search(r"(\d{4})-(\d{2})-(\d{2})", s)
@@ -184,7 +199,7 @@ def _parse_showtime_date(raw: str) -> str | None:
             y += 2000
         return f"{y:04d}-{mo:02d}-{d:02d}"
 
-    # Spanish prose: "23 de abril de 2026" / "miércoles 23 de abril"
+    # Spanish prose with "de": "23 de abril de 2026" / "miércoles 23 de abril"
     m = re.search(
         r"(\d{1,2})\s+de\s+([a-záéíóúüñ]+)(?:\s+de\s+(\d{4}))?", s
     )
@@ -194,6 +209,14 @@ def _parse_showtime_date(raw: str) -> str | None:
         if month_num:
             year = int(m.group(3)) if m.group(3) else datetime.now().year
             return f"{year:04d}-{month_num:02d}-{day:02d}"
+
+    # Spanish prose without "de": "26 abril" (current API format)
+    m = re.search(r"(\d{1,2})\s+([a-záéíóúüñ]+)", s)
+    if m:
+        day = int(m.group(1))
+        month_num = _MONTHS_ES.get(m.group(2)[:3])
+        if month_num:
+            return f"{datetime.now().year:04d}-{month_num:02d}-{day:02d}"
 
     return None
 
@@ -211,8 +234,9 @@ def _parse_time(time_val: str, ampm_val: str) -> str | None:
     if not time_val:
         return None
 
-    # Strip seconds if present
-    time_clean = re.sub(r":\d{2}$", "", time_val.strip())
+    # Strip seconds if present (HH:MM:SS → HH:MM). Only matches when there
+    # are two colons so "10:50" is not accidentally truncated to "10".
+    time_clean = re.sub(r"^(\d{1,2}:\d{2}):\d{2}", r"\1", time_val.strip())
 
     m = re.match(r"(\d{1,2}):(\d{2})", time_clean)
     if not m:
@@ -353,6 +377,7 @@ class CinepolisScraper(BaseScraper):
         movie: dict,
         date_entry: dict,
         showtime: dict,
+        format_entry: dict | None = None,
     ) -> dict[str, Any] | None:
         """Build one event dict from a single scheduled showtime.
 
@@ -368,7 +393,8 @@ class CinepolisScraper(BaseScraper):
         title = title.strip()
 
         raw_date = (
-            date_entry.get("ShowtimeDate")
+            date_entry.get("FilterDate")        # "/Date(ms)/" — most reliable
+            or date_entry.get("ShowtimeDate")   # "26 abril" / "Miércoles 23 de Abril"
             or date_entry.get("showtimeDate")
             or date_entry.get("Date")
         )
@@ -406,7 +432,16 @@ class CinepolisScraper(BaseScraper):
 
         cinema_name = (cinema.get("Name") or cinema.get("name") or "").strip()
 
-        fmt = _extract_formats(showtime)
+        # New API: format name lives in Formats[].Name (e.g. "4DX 3D ESP", "ESP").
+        # Strip language tokens; an empty result means standard 2D.
+        if format_entry is not None:
+            _lang = {"ESP", "SUB", "ESPAÑOL", "SUBTITULADA", "DOBLADA", "LATINO"}
+            fmt = " ".join(
+                p for p in (format_entry.get("Name") or "").split()
+                if p.upper() not in _lang
+            )
+        else:
+            fmt = _extract_formats(showtime)
         display_name = f"{title} ({fmt})" if fmt and fmt.upper() not in ("2D", "") else title
 
         event: dict[str, Any] = {
@@ -473,46 +508,40 @@ class CinepolisScraper(BaseScraper):
 
             sector_events = 0
 
+            # New API structure: cinema → Dates[] → Movies[] → Formats[] → Showtimes[]
             for cinema in cinemas:
-                cinema_name = (cinema.get("Name") or cinema.get("name") or "").strip()
-                movies = cinema.get("Movies") or cinema.get("movies") or []
-
-                if not isinstance(movies, list):
-                    continue
-
-                for movie in movies:
-                    dates = movie.get("Dates") or movie.get("dates") or []
-                    if not isinstance(dates, list):
+                for date_entry in (cinema.get("Dates") or []):
+                    if not isinstance(date_entry, dict):
                         continue
-
-                    for date_entry in dates:
-                        showtimes = (
-                            date_entry.get("Showtimes")
-                            or date_entry.get("showtimes")
-                            or []
-                        )
-                        if not isinstance(showtimes, list):
+                    for movie in (date_entry.get("Movies") or []):
+                        if not isinstance(movie, dict):
                             continue
-
-                        for showtime in showtimes:
-                            ev = self._build_event(cinema, movie, date_entry, showtime)
-                            if ev is None:
+                        for format_entry in (movie.get("Formats") or []):
+                            if not isinstance(format_entry, dict):
                                 continue
+                            for showtime in (format_entry.get("Showtimes") or []):
+                                if not isinstance(showtime, dict):
+                                    continue
 
-                            src = ev["source_url"]
-                            if src in seen_source_urls:
-                                continue
-                            seen_source_urls.add(src)
-
-                            all_events.append(ev)
-                            sector_events += 1
-
-                            if self.max_events and len(all_events) >= self.max_events:
-                                logger.info(
-                                    "[cinepolis] Reached max_events=%d", self.max_events
+                                ev = self._build_event(
+                                    cinema, movie, date_entry, showtime, format_entry
                                 )
-                                break
+                                if ev is None:
+                                    continue
 
+                                src = ev["source_url"]
+                                if src in seen_source_urls:
+                                    continue
+                                seen_source_urls.add(src)
+
+                                all_events.append(ev)
+                                sector_events += 1
+
+                                if self.max_events and len(all_events) >= self.max_events:
+                                    logger.info("[cinepolis] Reached max_events=%d", self.max_events)
+                                    break
+                            if self.max_events and len(all_events) >= self.max_events:
+                                break
                         if self.max_events and len(all_events) >= self.max_events:
                             break
                     if self.max_events and len(all_events) >= self.max_events:

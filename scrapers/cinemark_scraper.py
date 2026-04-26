@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -175,7 +176,7 @@ def _build_ticket_url(cinema_id: int, corporate_film_id: str, pelicula_slug: str
 
 def _extract_poster(film: dict[str, Any]) -> str | None:
     """Return the best available poster image URL from a film dict."""
-    for key in ("PosterDynamic", "GraphicUrl", "Poster", "posterUrl", "imageUrl"):
+    for key in ("PosterDynamic", "GraphicUrl", "graphic_url", "Poster", "posterUrl", "imageUrl"):
         val = film.get(key)
         if val and isinstance(val, str) and val.startswith("http"):
             return val
@@ -184,7 +185,6 @@ def _extract_poster(film: dict[str, Any]) -> str | None:
 
 def _slug(title: str) -> str:
     """Convert a movie title to a URL-safe slug (lowercase, hyphens)."""
-    import re
     s = title.lower().strip()
     s = re.sub(r"[áàä]", "a", s)
     s = re.sub(r"[éèë]", "e", s)
@@ -207,7 +207,7 @@ class CinemarkScraper(BaseScraper):
     def __init__(
         self,
         cinema_ids: list[int] | None = None,
-        include_releases: bool = True,
+        include_releases: bool = False,
         max_events: int = 0,
         debug: bool = False,
     ) -> None:
@@ -272,59 +272,66 @@ class CinemarkScraper(BaseScraper):
     def _fetch_film_detail(self, corporate_film_id: str) -> dict[str, Any]:
         """GET /getMovie?corporate_film_id={id} → film detail dict.
 
-        Results are cached in self._film_detail_cache to avoid duplicate
-        requests when the same film plays at multiple cinemas.
+        NOTE: As of 2026-04 this endpoint returns 404. The billboard response
+        already contains title, synopsis, graphic_url and rating, so we skip
+        the network call and return an empty dict to avoid 404 spam.
         """
-        if corporate_film_id in self._film_detail_cache:
-            return self._film_detail_cache[corporate_film_id]
-
-        time.sleep(REQUEST_DELAY)
-        url = f"{API_BASE}/getMovie"
-        data = self._get_json(url, params={"corporate_film_id": corporate_film_id})
-
-        if not isinstance(data, dict):
-            # Some APIs wrap the result in a list
-            if isinstance(data, list) and data:
-                data = data[0]
-            else:
-                data = {}
-
-        self._film_detail_cache[corporate_film_id] = data
-        return data
+        return {}
 
     # ── Billboard → event list ────────────────────────────────────────────────
 
     def _films_from_billboard(self, raw: Any) -> list[dict[str, Any]]:
-        """Normalise the billboard response into a list of film dicts.
+        """Normalise the billboard response into a list of film dicts with Sessions.
 
-        Vista returns either:
-          - A list of film objects directly:       [{CorporateFilmId, Sessions, ...}, ...]
-          - A dict with a key containing the list: {"PremieresBillboard": [...]}
-          - A dict with a single top-level list value
+        Current API returns a date-grouped structure:
+          [{date: "2026-04-26", movies: [{..., movie_versions: [{sessions: [...]}]}]}, ...]
+
+        Each movie is deduplicated by corporate_film_id; all sessions across all
+        dates and versions are flattened into a "Sessions" list on the film dict.
+        A "Format" key is injected into each session from the version title.
+
+        Legacy flat-list format is also handled for backwards compatibility.
         """
-        if isinstance(raw, list):
-            return raw
+        if not isinstance(raw, list) or not raw:
+            if isinstance(raw, dict):
+                for key in ("PremieresBillboard", "Films", "films", "movies", "Movies", "data", "results"):
+                    val = raw.get(key)
+                    if isinstance(val, list):
+                        return val
+                for val in raw.values():
+                    if isinstance(val, list):
+                        return val
+            return []
 
-        if isinstance(raw, dict):
-            # Try known Vista wrapper keys (in priority order)
-            for key in (
-                "PremieresBillboard",
-                "Films",
-                "films",
-                "movies",
-                "Movies",
-                "data",
-                "results",
-            ):
-                val = raw.get(key)
-                if isinstance(val, list):
-                    return val
-            # Fallback: first list value in the dict
-            for val in raw.values():
-                if isinstance(val, list):
-                    return val
+        # Detect new date-grouped format: first item has a "movies" key
+        if isinstance(raw[0], dict) and "movies" in raw[0]:
+            films_by_id: dict[str, dict[str, Any]] = {}
+            for date_entry in raw:
+                for movie in (date_entry.get("movies") or []):
+                    film_id = (
+                        movie.get("corporate_film_id")
+                        or movie.get("CorporateFilmId")
+                        or ""
+                    )
+                    if not film_id:
+                        continue
+                    if film_id not in films_by_id:
+                        films_by_id[film_id] = {**movie, "Sessions": []}
+                    for version in (movie.get("movie_versions") or []):
+                        # Extract the projection format code from version title.
+                        # Version title format: "MOVIE TITLE (2D PRE NT DOB)" → "2D"
+                        v_title = version.get("title", "")
+                        fmt_match = re.search(r"\(([^)]+)\)", v_title)
+                        fmt_tokens = fmt_match.group(1).split() if fmt_match else []
+                        fmt_code = fmt_tokens[0].upper() if fmt_tokens else ""
+                        for session in (version.get("sessions") or []):
+                            films_by_id[film_id]["Sessions"].append(
+                                {**session, "Format": fmt_code}
+                            )
+            return list(films_by_id.values())
 
-        return []
+        # Legacy: bare list of film dicts
+        return raw
 
     def _get_film_id(self, film: dict[str, Any]) -> str | None:
         """Extract corporate_film_id from a film dict (handles key variants)."""
@@ -708,7 +715,7 @@ if __name__ == "__main__":
 
     scraper = CinemarkScraper(
         cinema_ids=cinema_ids,
-        include_releases=not args.no_releases,
+        include_releases=False,   # /releases endpoint returns 400 — disabled
         max_events=args.max_events,
         debug=args.dry_run,
     )
