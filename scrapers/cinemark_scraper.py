@@ -79,25 +79,36 @@ MOVIE_PAGE_BASE = "https://www.cinemark.cl/pelicula"
 #   2. Click any cinema — the URL becomes /cine?tag=NNN&cine=slug.
 #   3. NNN is the cinema_id; slug is the key column below.
 #
-# IDs confirmed via browser inspection of cinemark.cl/cines widget JS:
-#   511 → cinemark_mallplaza_vespucio  (confirmed from widget URL pattern)
-#
-# All other IDs below are placeholders — update them after running:
-#   python scrapers/cinemark_scraper.py --list-cinemas
-# which fetches the /cinemas endpoint to enumerate all active locations.
+# IDs confirmed by visiting cinemark.cl/cine?tag=NNN for each active ID
+# and matching the "CINE SELECCIONADO: ..." page title (April 2026).
+# Active IDs probed via GET /api/vista/data/billboard?cinema_id=N.
 #
 # Format:  cinema_id (int) → venue_name matching seed.sql Venue.name
 
 CINEMA_MAP: dict[int, str] = {
-    # ── Cinemark ───────────────────────────────────────────────────────────────
-    511: "Cinemark Mallplaza Vespucio",   # confirmed
-    # TODO: verify remaining IDs from cinemark.cl/cines tag= params:
-    # 500: "Cinemark Alto Las Condes",
-    # 501: "Cinemark Plaza Norte",
-    # 502: "Cinemark Plaza Tobalaba",
-    # 503: "Cinemark Mid Mall Maipú",
-    # 504: "Cinemark Mallplaza Oeste",
-    # 505: "Cinemark Portal Ñuñoa",
+    # ── Santiago RM — all confirmed via cinemark.cl/cine?tag=NNN (April 2026) ──
+    511: "Cinemark Mallplaza Vespucio",           # La Florida
+    512: "Cinemark Alto Las Condes",              # Las Condes
+    513: "Cinemark Mallplaza Oeste",              # Cerrillos
+    519: "Cinemark Plaza Tobalaba",               # Puente Alto
+    572: "Cinemark Plaza Norte",                  # Huecharaba
+    2300: "Cinemark Portal Ñuñoa",               # Ñuñoa
+    2307: "Cinemark Mid Mall Maipú",             # Maipú
+    2310: "Cinemark Espacio Urbano Gran Avenida", # San Miguel
+    # ── Non-Santiago (excluded — no matching DB venue rows) ───────────────────
+    # 514: Espacio Urbano Viña del Mar  (tag=514)
+    # 517: unknown location             (tag=517, active but unidentified)
+    # 520: Mallplaza Iquique            (tag=520)
+    # 548: Mallplaza Trébol Talcahuano  (tag=548)
+    # 570: Mall Marina Viña del Mar     (tag=570)
+    # 2301: Portal Osorno               (tag=2301)
+    # 2302: Mallplaza Mirador Bío Bío   (tag=2302)
+    # 2303: Open Rancagua               (tag=2303)
+    # 2304: Open Ovalle                 (tag=2304)
+    # 2305: Mallplaza Arica             (tag=2305)
+    # 2306: Arauco Coronel              (tag=2306)
+    # 2308: Open La Calera              (tag=2308)
+    # 2309: Mallplaza La Serena         (tag=2309)
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
