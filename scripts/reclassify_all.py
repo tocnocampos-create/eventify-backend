@@ -76,15 +76,25 @@ def _should_update(old_cat: str | None, new_cat: str | None, old_type: str | Non
     if old_cat == "Teatro" and new_cat in ("Comedia", "Familia", "Música"):
         return True
 
-    # 6. Fix Arte / Cine false positives (where classifier gives a different signal)
-    if old_cat in ("Arte", "Cine") and new_cat is not None:
+    # 6. Fix Arte false positives (where classifier gives a different signal).
+    #    NOTE: Cine events are intentionally excluded — Cinépolis events were
+    #    classified by scraper URL lock, not keywords. TMDB descriptions now
+    #    contain words like "familiar" / "drama" that would wrongly fire
+    #    Teatro_Familiar / Teatro_Drama rules on cinema events.
+    if old_cat == "Arte" and new_cat is not None:
         return True
 
     # 7. Fix the stray "Nacional" category
     if old_cat == "Nacional":
         return True
 
-    # 8. General: accept any other non-None improvement
+    # 8. Protect Cine events — classified by scraper URL lock, not keyword rules.
+    #    TMDB descriptions contain "familiar", "drama", etc. that would wrongly
+    #    reclassify cinema events to Familia/Teatro. Never touch Cine events here.
+    if old_cat == "Cine":
+        return False
+
+    # 9. General: accept any other non-None improvement
     #    (e.g. Vida Nocturna → Música when venue lock fires)
     return True
 

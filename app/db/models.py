@@ -104,6 +104,7 @@ class Event(Base):
     url = Column(String(500), nullable=True)
     source_url = Column(String(500), nullable=True)
     is_verified = Column(Boolean, default=False, nullable=False, server_default="false")
+    is_sold_out = Column(Boolean, default=False, nullable=False, server_default="false")
     scraped_at = Column(DateTime(timezone=True), nullable=True)
     kids_friendly = Column(Boolean, default=False, nullable=False, server_default="false")
     age_restriction = Column(Integer, nullable=True)

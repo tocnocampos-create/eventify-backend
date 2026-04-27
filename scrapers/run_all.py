@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scrapers import classifier, deduplicator, enricher
 from scrapers.base_scraper import BaseScraper, _get_database_url
 from scrapers.cinemark_scraper import CinemarkScraper
+from scrapers.comedypass_scraper import ComedyPassScraper
 from scrapers.evently_scraper import EventlyScraper
 from scrapers.cinepolis_scraper import CinepolisScraper
 from scrapers.passline_scraper import PasslineScraper
@@ -166,6 +167,7 @@ def main() -> None:
 
     scrapers = [
         PuntoTicketScraper(max_pages=args.max_pages, max_events=args.max_events),
+        ComedyPassScraper(max_events=args.max_events),
         CinemarkScraper(max_events=args.max_events),
         CinepolisScraper(max_events=args.max_events),
         PasslineScraper(max_events=args.max_events),

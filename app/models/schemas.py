@@ -117,7 +117,8 @@ class EventBase(BaseModel):
     image_url: Optional[str] = Field(None, max_length=500)
     url: Optional[str] = Field(None, max_length=500)
     venue_id: Optional[int] = None
-    
+    is_sold_out: bool = False
+
     @field_validator('price_range', mode='before')
     @classmethod
     def convert_empty_price_range_to_none(cls, v):

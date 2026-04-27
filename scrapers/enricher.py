@@ -62,7 +62,7 @@ _VENUE_PREFIXES: list[str] = [
 _CATEGORY_VENUE_TYPE: list[tuple[str, str]] = [
     ("cine",           "Cine"),
     ("teatro",         "Teatro"),
-    ("comedia",        "Teatro"),          # Comedia events play in theatres
+    ("comedia",        "Comedia"),         # Comedy venues get their own type
     ("familiar",       "Teatro"),
     ("familia",        "Teatro"),          # "Familia" is now the canonical category
     ("música",         "Sala de Concierto"),

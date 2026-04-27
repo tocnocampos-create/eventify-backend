@@ -54,6 +54,9 @@ KEYWORD_RULES: dict[str, list[str]] = {
         "rock", "rock en vivo", "rock nacional", "punk", "metal",
         "heavy metal", "grunge", "indie rock", "post rock", "hard rock",
         "garage rock", "alternativo",
+        # Tribute / band experience patterns
+        "experience", "tributo", "tributo a", "the legend of", "homenaje a",
+        "black dog",
     ],
     "Pop": ["pop", "música en vivo", "pop rock", "pop latino"],
     "Indie": ["indie", "alternativo", "indie rock", "post rock", "experimental"],
@@ -161,13 +164,21 @@ VENUE_TYPE_FALLBACK: dict[str, tuple[str, str | None]] = {
 
 # ── Known venue name → locked category ────────────────────────────────────────
 # Substring match (lowercase) on venue_name. Applied as a hard override.
+# NOTE: Only lock → Música here. Do NOT add Teatro locks — venues named "teatro"
+# may be concert halls, not theaters. Category is determined by keyword rules.
 LOCKED_VENUE_CATEGORIES: dict[str, str] = {
-    "teatro municipal":         "Teatro",
+    # Major concert arenas / stadiums
     "movistar arena":           "Música",
     "estadio nacional":         "Música",
     "estadio bicentenario":     "Música",
     "estadio monumental":       "Música",
     "estadio san carlos":       "Música",
+    # Concert halls that use "teatro" in name but host rock/pop concerts
+    "teatro palermo":           "Música",
+    "teatro caupolicán":        "Música",
+    "teatro oriente":           "Música",
+    "teatro nescafé de las artes": "Música",
+    "teatro nescafe de las artes": "Música",
 }
 
 # ── Category / type mapping ───────────────────────────────────────────────────
