@@ -553,8 +553,8 @@ class CinemarkScraper(BaseScraper):
             event["image_url"] = poster
         if synopsis:
             event["description"] = synopsis
-        if price_range:
-            event["price_range"] = price_range
+        # Cinemark API rarely exposes live prices; fall back to known CLP range.
+        event["price_range"] = price_range or [3800.0, 9500.0]
 
         return event
 

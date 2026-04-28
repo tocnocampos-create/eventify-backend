@@ -482,6 +482,10 @@ class CinepolisScraper(BaseScraper):
             "type":             "Cine",
             "_locked_category": "Cine",
             "kids_friendly":    False,
+            # Approximate CLP price range — Cinépolis API doesn't expose live
+            # prices, but standard tickets fall in [3900, 9900] CLP. Used by
+            # the Eventify price filter so cinema events are not excluded.
+            "price_range":      [3900.0, 9900.0],
         }
 
         poster = _extract_poster(movie)
