@@ -109,6 +109,23 @@ WARMUP_URL = "https://passline.com"
 # Server-side region filter — 13 = Región Metropolitana de Santiago
 RM_REGION = "13"
 
+# Events whose titles contain any of these tokens are season passes /
+# membership campaigns, not single purchasable events — skip them.
+_SUBSCRIPTION_KEYWORDS: tuple[str, ...] = (
+    "abono",
+    "campaña",
+    "membres",        # membresía / membresia
+    "acceso abonado",
+    "temporada",
+    "pase de temporada",
+    "pase anual",
+    "suscripci",      # suscripción / suscripcion
+)
+
+# If fecha_termino − fecha_inicio exceeds this many days the listing is
+# almost certainly a multi-date pass or subscription, not a single event.
+_MAX_EVENT_SPAN_DAYS = 30
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -367,6 +384,14 @@ class PasslineScraper(BaseScraper):
         if not name:
             return None
 
+        # ── Subscription / membership filter ──────────────────────────────────
+        # Skip season passes, abonos, and membership campaigns — they are not
+        # single purchasable events and confuse availability/sold-out logic.
+        name_lower = name.lower()
+        if any(kw in name_lower for kw in _SUBSCRIPTION_KEYWORDS):
+            logger.debug("[passline] Skipping subscription event %r", name)
+            return None
+
         # ── Date + time ───────────────────────────────────────────────────────
         raw_date = _get_str(
             raw,
@@ -377,6 +402,25 @@ class PasslineScraper(BaseScraper):
         if not date_str:
             logger.debug("[passline] Unparseable date %r for %r — skipping", raw_date, name)
             return None
+
+        # Skip listings whose fecha_termino is more than _MAX_EVENT_SPAN_DAYS
+        # after fecha_inicio — these are multi-date passes, not single events.
+        fecha_termino_raw = _get_str(raw, "fecha_termino", "end_date", "date_end")
+        fecha_termino_str = _parse_date(fecha_termino_raw)
+        if fecha_termino_str and fecha_termino_str != date_str:
+            try:
+                span = (
+                    date.fromisoformat(fecha_termino_str)
+                    - date.fromisoformat(date_str)
+                ).days
+                if span > _MAX_EVENT_SPAN_DAYS:
+                    logger.debug(
+                        "[passline] Skipping multi-date listing %r (span=%d days)",
+                        name, span,
+                    )
+                    return None
+            except (ValueError, TypeError):
+                pass
 
         raw_time = _get_str(
             raw,
@@ -466,8 +510,19 @@ class PasslineScraper(BaseScraper):
             )
 
         # ── Sold out ──────────────────────────────────────────────────────────
-        # API returns "agotado": "1" when sold out, "0" otherwise
-        is_sold_out = str(raw.get("agotado", "0")) == "1"
+        # agotado="1" means Passline has exhausted its allocated ticket quota,
+        # but it ALSO fires when the event never had public Passline tickets at
+        # all (abonos, door-only, external channel) — in that case precio_min
+        # and disponibles are both empty strings.
+        #
+        # Rule: only mark sold-out when agotado="1" AND the event DID have a
+        # public Passline price (precio_min is non-empty), meaning tickets were
+        # actually sold through Passline and are now exhausted.  When
+        # precio_min is empty, the event simply has no public Passline channel
+        # — we leave is_sold_out=False and let users check the Passline page.
+        _agotado = str(raw.get("agotado", "0")) == "1"
+        _had_public_tickets = bool(str(raw.get("precio_min", "")).strip())
+        is_sold_out = _agotado and _had_public_tickets
 
         # ── Category hint — let classifier decide; provide hint if API gives one ──
         raw_category = _get_str(raw, "category_name", "category", "categoria", "type", "tipo", "genre")
@@ -489,8 +544,7 @@ class PasslineScraper(BaseScraper):
             event["description"] = description
         if price_range is not None:
             event["price_range"] = price_range
-        if is_sold_out:
-            event["is_sold_out"] = True
+        event["is_sold_out"] = is_sold_out
         if raw_category:
             # Pass as a hint; classifier may override unless _locked_category is set
             event["_category_hint"] = raw_category
