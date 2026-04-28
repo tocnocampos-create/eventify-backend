@@ -1,26 +1,40 @@
-"""TicketPlus Chile scraper — fetches events from category taxon listing pages.
+"""TicketPlus Chile scraper — fetches events from category taxon listing pages,
+venue-specific company pages, and the GAM subdomain.
 
 TicketPlus (ticketplus.cl) is built on Spree Commerce (Ruby on Rails).
-Category listing pages use the /taxons/ path; pagination is ?page=N.
-Product detail pages carry event-specific metadata in Spree "properties"
-(a table of key/value rows: Fecha, Hora, Lugar, Dirección, etc.).
+Category listing pages use the /taxons/ path; company pages use /companies/{slug};
+pagination is ?page=N.  Product detail pages carry event-specific metadata in
+Spree "properties" (a table of key/value rows: Fecha, Hora, Lugar, etc.).
 
-Scraped categories:
-    /taxons/teatros   → category hint "Teatro"
-    /taxons/musica    → category hint "Música"
-    /taxons/fiestas   → left to classifier (Vida Nocturna / Arte / etc.)
-    /taxons/familiar  → category hint "Teatro", kids_friendly=True
+Scraped sources:
+    Taxon pages (category hints applied):
+        /taxons/teatros   → "Teatro"
+        /taxons/musica    → "Música"
+        /taxons/fiestas   → classifier decides
+        /taxons/familiar  → "Teatro", kids_friendly=True
 
-Only Región Metropolitana events are kept (SANTIAGO_TOKENS filter applied
-to venue_name + location fields scraped from the detail page).
+    Company pages (venue_name forced to canonical DB name):
+        /companies/sala-nemesio               → Sala Nemesio Antúnez  (Cine)
+        /companies/m100                       → Matucana 100  (classifier)
+        /companies/corpartes                  → CorpArtes  (Teatro)
+        /companies/teatro-universidad-de-chile→ Teatro Universidad de Chile (Teatro)
+        /companies/planetario                 → Planetario de Santiago  (classifier)
+        /companies/gam                        → GAM  (classifier)
+
+    GAM subdomain:
+        https://gam.ticketplus.cl             → venue_name forced to "GAM"
+
+Only Región Metropolitana events are kept for taxon pages (SANTIAGO_TOKENS).
+Company pages and GAM subdomain skip the geo filter — venue is already known RM.
 
 source_url is the canonical product detail URL — stable across re-scrapes.
 
 Run:
     python scrapers/ticketplus_scraper.py --dry-run
     python scrapers/ticketplus_scraper.py --dry-run --verbose
-    python scrapers/ticketplus_scraper.py --category teatros --dry-run
-    python scrapers/ticketplus_scraper.py --debug --category musica
+    python scrapers/ticketplus_scraper.py --source teatros --dry-run
+    python scrapers/ticketplus_scraper.py --debug --source musica
+    python scrapers/ticketplus_scraper.py --source gam --dry-run
 """
 from __future__ import annotations
 
@@ -63,6 +77,23 @@ CATEGORY_CONFIG: list[tuple[str, str | None, bool, bool]] = [
     ("familiar", "Teatro",  True,  True),
 ]
 
+# Company pages — each corresponds to a known RM venue in the DB.
+# Forcing venue_name_override bypasses fuzzy matching and prevents the
+# enricher from falling back to "Plaza de Armas" or creating a duplicate.
+# Each tuple: (company_slug, canonical_venue_name, category_hint, lock_category)
+COMPANY_CONFIG: list[tuple[str, str, str | None, bool]] = [
+    ("sala-nemesio",                "Sala Nemesio Antúnez",        None,     False),
+    ("m100",                        "Matucana 100",                 None,     False),
+    ("corpartes",                   "CorpArtes",                    "Teatro", True),
+    ("teatro-universidad-de-chile", "Teatro Universidad de Chile",  "Teatro", True),
+    ("planetario-huechuraba",       "Planetario de Santiago",       None,     False),
+    ("gam",                         "GAM",                          None,     False),
+]
+
+# GAM subdomain — same Spree structure, events also attributed to GAM venue.
+GAM_SUBDOMAIN  = "https://gam.ticketplus.cl"
+GAM_VENUE_NAME = "GAM"
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -87,12 +118,12 @@ _PROP_ADDR  = {"dirección", "direccion", "address", "domicilio", "ubicación", 
 
 # ── HTML helpers ──────────────────────────────────────────────────────────────
 
-def _absolute_url(href: str) -> str:
+def _absolute_url(href: str, base: str = BASE_URL) -> str:
     if href.startswith("http"):
         return href
     if href.startswith("//"):
         return "https:" + href
-    return BASE_URL + href if href.startswith("/") else href
+    return base + href if href.startswith("/") else href
 
 
 def _parse_time_str(raw: str) -> str | None:
@@ -232,12 +263,12 @@ class TicketPlusScraper(BaseScraper):
         if cards:
             return cards
 
-        # 4. Last resort: collect block ancestors of /products/ links
+        # 4. Last resort: collect block ancestors of /products/ or /events/ links
         cards = []
         seen: set[str] = set()
         for a in soup.find_all("a", href=True):
             href = a["href"]
-            if not re.search(r"/products?/", href, re.I):
+            if not re.search(r"/products?/|/events?/", href, re.I):
                 continue
             if href in seen:
                 continue
@@ -253,15 +284,16 @@ class TicketPlusScraper(BaseScraper):
 
         return cards
 
-    def _parse_card(self, card: Any) -> dict[str, Any] | None:
+    def _parse_card(self, card: Any, base_url: str = BASE_URL) -> dict[str, Any] | None:
         """Extract stub event fields from a listing-page card.
 
         Returns a partial dict; detail page fills in date, time, venue, price.
+        base_url is used to resolve relative hrefs (important for subdomains).
         """
         event: dict[str, Any] = {}
 
         # ── URL ───────────────────────────────────────────────────────────────
-        link = card.find("a", href=re.compile(r"/products?/", re.I))
+        link = card.find("a", href=re.compile(r"/(?:products?|events?)/", re.I))
         if not link:
             link = card.find("a", href=True)
         if not link:
@@ -269,7 +301,7 @@ class TicketPlusScraper(BaseScraper):
         href = link.get("href", "")
         if not href or href in ("#", "javascript:void(0)"):
             return None
-        full_url = _absolute_url(href)
+        full_url = _absolute_url(href, base_url)
         event["url"] = full_url
         event["source_url"] = full_url
 
@@ -384,11 +416,29 @@ class TicketPlusScraper(BaseScraper):
                 ld = json.loads(script.string or "")
                 items = ld if isinstance(ld, list) else [ld]
                 for item in items:
-                    if item.get("@type") not in (
+                    ld_type = item.get("@type", "")
+
+                    # ── Product JSON-LD → extract price from offers ────────────
+                    if ld_type == "Product" and "price_range" not in result:
+                        offers = item.get("offers") or {}
+                        if isinstance(offers, list):
+                            offers = offers[0] if offers else {}
+                        low = offers.get("price") or offers.get("lowPrice")
+                        high = offers.get("highPrice") or low
+                        if low is not None:
+                            try:
+                                result["price_range"] = [float(low), float(high)]
+                            except (TypeError, ValueError):
+                                pass
+                        continue
+
+                    if ld_type not in (
                         "Event", "MusicEvent", "TheaterEvent",
                         "SportsEvent", "ComedyEvent", "DanceEvent",
                     ):
                         continue
+
+                    # ── Event JSON-LD ──────────────────────────────────────────
                     # Date + time
                     if "date" not in result:
                         start = item.get("startDate") or ""
@@ -415,7 +465,7 @@ class TicketPlusScraper(BaseScraper):
                     if "price_range" not in result:
                         offers = item.get("offers") or {}
                         if isinstance(offers, list):
-                            offers = offers[0]
+                            offers = offers[0] if offers else {}
                         low = offers.get("price") or offers.get("lowPrice")
                         high = offers.get("highPrice") or low
                         if low is not None:
@@ -506,71 +556,304 @@ class TicketPlusScraper(BaseScraper):
 
         return None
 
-    # ── Public fetch_events ───────────────────────────────────────────────────
+    # ── Company page direct-link extractor ───────────────────────────────────
 
-    def fetch_events(self) -> list[dict[str, Any]]:
-        """Fetch Región Metropolitana events from all configured taxon pages.
+    def _scrape_company_page(
+        self,
+        company_slug: str,
+        source_label: str,
+        venue_name_override: str | None,
+        cat_hint: str | None,
+        lock: bool,
+        all_events: list[dict[str, Any]],
+        seen_urls: set[str],
+    ) -> None:
+        """Scrape a TicketPlus company page by extracting all /events/{slug} links
+        directly from the HTML, then fetching each event detail page.
 
-        For each category:
-          1. Iterate listing pages (pagination)
-          2. Parse each event card (stub: name, image, listing-page price/date)
-          3. Fetch the detail page (date, time, venue, description, price)
-          4. Apply Santiago filter on venue + address
-          5. Apply category hints / _locked_category sentinel
-
-        Returns a flat list of event dicts ready for classifier + enricher.
+        Company pages embed event links statically (unlike taxon pages which are
+        JS-rendered), so we can bypass the generic card-detection logic and collect
+        every event URL in one pass.  Pagination is handled by following the
+        rel="next" link.
         """
-        all_events: list[dict[str, Any]] = []
-        seen_urls: set[str] = set()
+        url: str | None = f"{BASE_URL}/companies/{company_slug}"
+        page = 1
 
-        for slug, cat_hint, kids, lock in CATEGORY_CONFIG:
-            cat_url = f"{BASE_URL}/taxons/{slug}"
-            logger.info("[ticketplus] Scraping category %r — %s", slug, cat_url)
+        logger.info("[ticketplus] Scraping company page %r — %s", source_label, url)
 
-            url: str | None = cat_url
-            page = 1
+        while url and page <= self.max_pages:
+            soup = self._get_soup(url)
+            if soup is None:
+                break
 
-            while url and page <= self.max_pages:
-                logger.info("[ticketplus] [%s] page %d: %s", slug, page, url)
-                soup = self._get_soup(url)
-                if soup is None:
+            # Collect every unique /events/{slug} link on this page
+            page_urls: list[str] = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                m = re.match(r"^/events/([^/?#]+)", href)
+                if not m:
+                    continue
+                full = f"{BASE_URL}/events/{m.group(1)}"
+                if full not in seen_urls and full not in page_urls:
+                    page_urls.append(full)
+
+            if not page_urls:
+                logger.info(
+                    "[ticketplus] [%s] No event links on page %d — stopping",
+                    source_label, page,
+                )
+                break
+
+            page_new = 0
+            for detail_url in page_urls:
+                if self.max_events and len(all_events) >= self.max_events:
                     break
 
-                if self.debug and page == 1:
-                    self._print_debug(soup, slug)
-                    break
+                time.sleep(REQUEST_DELAY)
+                detail = self.fetch_event_detail(detail_url)
 
-                cards = self._find_cards(soup)
-                if not cards:
-                    logger.warning(
-                        "[ticketplus] [%s] No cards on page %d — stopping category",
-                        slug, page,
+                if not detail.get("date"):
+                    logger.debug(
+                        "[ticketplus] [%s] No date for %s — skipping", source_label, detail_url
                     )
-                    break
+                    continue
 
-                page_new = 0
-                for card in cards:
-                    ev = self._parse_card(card)
-                    if ev is None:
-                        continue
+                ev: dict[str, Any] = {
+                    "url":        detail_url,
+                    "source_url": detail_url,
+                    "_source_label": source_label,
+                }
+                ev.update(detail)
 
-                    detail_url = ev.get("url", "")
-                    if not detail_url or detail_url in seen_urls:
-                        continue
+                # Name fallback: extract from URL slug
+                if not ev.get("name"):
+                    slug_name = detail_url.rstrip("/").split("/")[-1].replace("-", " ").title()
+                    ev["name"] = slug_name
 
-                    # Fetch detail page for date, time, venue, description, price
-                    detail = self.fetch_event_detail(detail_url)
-                    for key, val in detail.items():
-                        ev.setdefault(key, val)
+                if venue_name_override:
+                    ev["venue_name"] = venue_name_override
 
-                    # Mandatory: skip if no date could be extracted at all
-                    if not ev.get("date"):
-                        logger.debug(
-                            "[ticketplus] No date for %r — skipping", ev.get("name")
-                        )
-                        continue
+                if cat_hint:
+                    ev.setdefault("category", cat_hint)
+                    if lock:
+                        ev["_locked_category"] = cat_hint
 
-                    # Región Metropolitana filter
+                seen_urls.add(detail_url)
+                all_events.append(ev)
+                page_new += 1
+
+            logger.info(
+                "[ticketplus] [%s] page %d: %d new events (total so far: %d)",
+                source_label, page, page_new, len(all_events),
+            )
+
+            if self.max_events and len(all_events) >= self.max_events:
+                break
+
+            next_url = self._next_page_url(soup, url)
+            if not next_url or next_url == url:
+                break
+            url = next_url
+            page += 1
+            time.sleep(REQUEST_DELAY)
+
+    # ── /events/search.json API crawler (used for GAM subdomain) ─────────────
+
+    @staticmethod
+    def _parse_search_date(date_str: str) -> tuple[str | None, str | None]:
+        """Parse a TicketPlus search.json date string like 'Jueves 16 de Abril 19:30'.
+
+        Returns (iso_date, time_start) or (None, None).
+        """
+        if not date_str:
+            return None, None
+        t_m = re.search(r"(\d{1,2}):(\d{2})", date_str)
+        time_start = f"{int(t_m.group(1)):02d}:{t_m.group(2)}" if t_m else None
+        # Remove day-of-week prefix and time
+        clean = re.sub(r"^\s*(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\s+", "", date_str, flags=re.I)
+        clean = re.sub(r"\d{1,2}:\d{2}", "", clean).strip()
+        iso_date = _parse_date_es(clean)
+        return iso_date, time_start
+
+    def _scrape_from_search_json(
+        self,
+        base_url: str,
+        source_label: str,
+        venue_name_override: str | None,
+        cat_hint: str | None,
+        lock: bool,
+        all_events: list[dict[str, Any]],
+        seen_urls: set[str],
+        fetch_details: bool = True,
+    ) -> None:
+        """Fetch events from /events/search.json API and append to all_events.
+
+        Designed for company subdomains (gam.ticketplus.cl) where the JSON API
+        returns the complete event listing without pagination.
+
+        Args:
+            base_url:            Subdomain base (e.g. https://gam.ticketplus.cl).
+            fetch_details:       If True, also GET each event's detail page for
+                                 description.  Adds ~2s per event but enriches data.
+        """
+        api_url = f"{base_url.rstrip('/')}/events/search.json"
+        logger.info("[ticketplus] Scraping search.json %r — %s", source_label, api_url)
+
+        try:
+            resp = self.session.get(api_url, timeout=20)
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+        except Exception as exc:
+            logger.error("[ticketplus] search.json fetch failed (%s): %s", source_label, exc)
+            return
+
+        logger.info("[ticketplus] [%s] search.json returned %d results", source_label, len(results))
+        new_count = 0
+
+        for raw in results:
+            url = (raw.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+
+            title = (raw.get("title") or "").strip()
+            if not title:
+                continue
+
+            iso_date, time_start = self._parse_search_date(raw.get("date", ""))
+            if not iso_date:
+                logger.debug("[ticketplus] [%s] No date for %r — skipping", source_label, title)
+                continue
+
+            ev: dict[str, Any] = {
+                "name":       title,
+                "url":        url,
+                "source_url": url,
+                "date":       iso_date,
+                "_source_label": source_label,
+            }
+            if time_start:
+                ev["time_start"] = time_start
+            if raw.get("img"):
+                ev["image_url"] = raw["img"]
+            price_raw = raw.get("price")
+            if price_raw is not None:
+                try:
+                    p = float(price_raw)
+                    ev["price_range"] = [0.0, 0.0] if p == 0 else [p, p]
+                except (ValueError, TypeError):
+                    pass
+            if raw.get("location"):
+                ev["address"] = raw["location"]
+
+            # Optionally enrich with detail page (description, structured venue, exact price)
+            if fetch_details:
+                time.sleep(REQUEST_DELAY)
+                detail = self.fetch_event_detail(url)
+                for key, val in detail.items():
+                    ev.setdefault(key, val)
+
+            # Force venue_name so enricher matches the correct DB row
+            if venue_name_override:
+                ev["venue_name"] = venue_name_override
+
+            if cat_hint:
+                ev.setdefault("category", cat_hint)
+                if lock:
+                    ev["_locked_category"] = cat_hint
+
+            seen_urls.add(url)
+            all_events.append(ev)
+            new_count += 1
+
+            if self.max_events and len(all_events) >= self.max_events:
+                break
+
+        logger.info("[ticketplus] [%s] search.json: %d new events added", source_label, new_count)
+
+    # ── Core listing crawler (shared by taxon pages, company pages, subdomain) ──
+
+    def _scrape_source(
+        self,
+        start_url: str,
+        source_label: str,
+        cat_hint: str | None,
+        lock: bool,
+        kids: bool,
+        venue_name_override: str | None,
+        skip_geo_filter: bool,
+        all_events: list[dict[str, Any]],
+        seen_urls: set[str],
+        base_url_for_links: str = BASE_URL,
+    ) -> None:
+        """Paginate one listing source and append collected events to all_events.
+
+        Args:
+            start_url:           First page URL of the listing.
+            source_label:        Human-readable label for logs / per-source stats.
+            cat_hint:            Category to apply (setdefault) on each event.
+            lock:                If True, set _locked_category so classifier can't override.
+            kids:                Set kids_friendly=True on every event.
+            venue_name_override: Force this venue_name before enrichment.  Used for
+                                 company pages and the GAM subdomain so the enricher
+                                 resolves the correct DB venue instead of guessing.
+            skip_geo_filter:     Skip the Santiago region filter (company/subdomain
+                                 pages already represent known RM venues).
+            all_events:          Shared accumulator list (mutated in-place).
+            seen_urls:           Shared dedup set (mutated in-place).
+            base_url_for_links:  Base URL used to resolve relative hrefs on the page.
+        """
+        url: str | None = start_url
+        page = 1
+
+        logger.info("[ticketplus] Scraping source %r — %s", source_label, start_url)
+
+        while url and page <= self.max_pages:
+            logger.info("[ticketplus] [%s] page %d: %s", source_label, page, url)
+            soup = self._get_soup(url)
+            if soup is None:
+                break
+
+            if self.debug and page == 1:
+                self._print_debug(soup, source_label)
+                break
+
+            cards = self._find_cards(soup)
+            if not cards:
+                logger.warning(
+                    "[ticketplus] [%s] No cards on page %d — stopping",
+                    source_label, page,
+                )
+                break
+
+            page_new = 0
+            for card in cards:
+                ev = self._parse_card(card, base_url=base_url_for_links)
+                if ev is None:
+                    continue
+
+                detail_url = ev.get("url", "")
+                if not detail_url or detail_url in seen_urls:
+                    continue
+
+                # Fetch detail page for date, time, venue, description, price
+                detail = self.fetch_event_detail(detail_url)
+                for key, val in detail.items():
+                    ev.setdefault(key, val)
+
+                # Mandatory: skip if no date could be extracted
+                if not ev.get("date"):
+                    logger.debug(
+                        "[ticketplus] No date for %r — skipping", ev.get("name")
+                    )
+                    continue
+
+                # Force venue_name for company/subdomain pages so the enricher
+                # matches the correct DB row and never falls back to a wrong venue.
+                if venue_name_override:
+                    ev["venue_name"] = venue_name_override
+
+                # Región Metropolitana filter (skipped for known RM venues)
+                if not skip_geo_filter:
                     location_hint = (
                         ev.get("venue_name", "")
                         + " "
@@ -580,46 +863,102 @@ class TicketPlusScraper(BaseScraper):
                     )
                     if not _is_santiago(location_hint):
                         logger.debug(
-                            "[ticketplus] Non-Santiago event %r — skipping", ev.get("name")
+                            "[ticketplus] Non-Santiago event %r — skipping",
+                            ev.get("name"),
                         )
                         continue
 
-                    seen_urls.add(detail_url)
+                seen_urls.add(detail_url)
 
-                    # Apply category hints
-                    if cat_hint:
-                        ev.setdefault("category", cat_hint)
-                        if lock:
-                            ev["_locked_category"] = cat_hint
-                    if kids:
-                        ev["kids_friendly"] = True
+                # Apply category hints
+                if cat_hint:
+                    ev.setdefault("category", cat_hint)
+                    if lock:
+                        ev["_locked_category"] = cat_hint
+                if kids:
+                    ev["kids_friendly"] = True
 
-                    all_events.append(ev)
-                    page_new += 1
+                # Tag for per-source stats (stripped by deduplicator before DB write)
+                ev["_source_label"] = source_label
 
-                    if self.max_events and len(all_events) >= self.max_events:
-                        logger.info(
-                            "[ticketplus] Reached max_events=%d", self.max_events
-                        )
-                        break
-
-                logger.info(
-                    "[ticketplus] [%s] page %d: %d new RM events (total: %d)",
-                    slug, page, page_new, len(all_events),
-                )
+                all_events.append(ev)
+                page_new += 1
 
                 if self.max_events and len(all_events) >= self.max_events:
+                    logger.info("[ticketplus] Reached max_events=%d", self.max_events)
                     break
 
-                next_url = self._next_page_url(soup, url)
-                if not next_url or next_url == url:
-                    break
-                url = next_url
-                page += 1
-                time.sleep(REQUEST_DELAY)
+            logger.info(
+                "[ticketplus] [%s] page %d: %d new events (total so far: %d)",
+                source_label, page, page_new, len(all_events),
+            )
 
             if self.max_events and len(all_events) >= self.max_events:
                 break
+
+            next_url = self._next_page_url(soup, url)
+            if not next_url or next_url == url:
+                break
+            url = next_url
+            page += 1
+            time.sleep(REQUEST_DELAY)
+
+    # ── Public fetch_events ───────────────────────────────────────────────────
+
+    def fetch_events(self) -> list[dict[str, Any]]:
+        """Fetch Región Metropolitana events from all configured sources.
+
+        Sources (in order):
+          1. Taxon listing pages — RM geo filter applied
+          2. Company pages — venue_name forced, geo filter skipped
+          3. GAM subdomain  — venue_name forced to "GAM", geo filter skipped
+
+        Returns a flat list of event dicts ready for classifier + enricher.
+        """
+        all_events: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+
+        # ── 1. Category (taxon) pages ─────────────────────────────────────────
+        for slug, cat_hint, kids, lock in CATEGORY_CONFIG:
+            if self.max_events and len(all_events) >= self.max_events:
+                break
+            self._scrape_source(
+                start_url=f"{BASE_URL}/taxons/{slug}",
+                source_label=slug,
+                cat_hint=cat_hint,
+                lock=lock,
+                kids=kids,
+                venue_name_override=None,
+                skip_geo_filter=False,
+                all_events=all_events,
+                seen_urls=seen_urls,
+            )
+
+        # ── 2. Company pages (known RM venues) ────────────────────────────────
+        for slug, venue_name, cat_hint, lock in COMPANY_CONFIG:
+            if self.max_events and len(all_events) >= self.max_events:
+                break
+            self._scrape_company_page(
+                company_slug=slug,
+                source_label=f"company:{slug}",
+                venue_name_override=venue_name,
+                cat_hint=cat_hint,
+                lock=lock,
+                all_events=all_events,
+                seen_urls=seen_urls,
+            )
+
+        # ── 3. GAM subdomain — use /events/search.json API (no pagination needed) ─
+        if GAM_SUBDOMAIN and not (self.max_events and len(all_events) >= self.max_events):
+            self._scrape_from_search_json(
+                base_url=GAM_SUBDOMAIN,
+                source_label="gam-subdomain",
+                venue_name_override=GAM_VENUE_NAME,
+                cat_hint=None,
+                lock=False,
+                all_events=all_events,
+                seen_urls=seen_urls,
+            )
 
         logger.info("[ticketplus] Total events collected: %d", len(all_events))
         return all_events
@@ -675,6 +1014,12 @@ if __name__ == "__main__":
         format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
     )
 
+    _ALL_SOURCES = (
+        [s for s, *_ in CATEGORY_CONFIG]
+        + [f"company:{s}" for s, *_ in COMPANY_CONFIG]
+        + ["gam-subdomain"]
+    )
+
     parser = argparse.ArgumentParser(description="TicketPlus Chile scraper")
     parser.add_argument(
         "--dry-run",
@@ -687,13 +1032,13 @@ if __name__ == "__main__":
         help="Print first-page HTML structure and exit (no detail fetches)",
     )
     parser.add_argument(
-        "--category",
-        choices=[s for s, *_ in CATEGORY_CONFIG],
-        help="Scrape only this category (default: all 4)",
+        "--source",
+        choices=_ALL_SOURCES,
+        help="Scrape only this source (default: all sources)",
     )
     parser.add_argument(
         "--max-pages", type=int, default=10,
-        help="Maximum listing pages per category",
+        help="Maximum listing pages per source",
     )
     parser.add_argument(
         "--max-events", type=int, default=0,
@@ -705,12 +1050,21 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Filter to one category if requested
-    if args.category:
+    # Filter to one source if requested
+    if args.source:
         import scrapers.ticketplus_scraper as _self
-        _self.CATEGORY_CONFIG = [
-            c for c in CATEGORY_CONFIG if c[0] == args.category
-        ]
+        if args.source.startswith("company:"):
+            slug = args.source[len("company:"):]
+            _self.CATEGORY_CONFIG = []
+            _self.COMPANY_CONFIG = [c for c in COMPANY_CONFIG if c[0] == slug]
+            _self.GAM_SUBDOMAIN = ""   # skip subdomain
+        elif args.source == "gam-subdomain":
+            _self.CATEGORY_CONFIG = []
+            _self.COMPANY_CONFIG = []
+        else:
+            _self.CATEGORY_CONFIG = [c for c in CATEGORY_CONFIG if c[0] == args.source]
+            _self.COMPANY_CONFIG = []
+            _self.GAM_SUBDOMAIN = ""
 
     scraper = TicketPlusScraper(
         max_pages=args.max_pages,
@@ -720,10 +1074,11 @@ if __name__ == "__main__":
     events = scraper.fetch_events()
 
     if args.dry_run or args.debug:
-        print(f"\n── TicketPlus dry-run: {len(events)} RM events ────────────────")
-        for ev in events[:10]:
+        print(f"\n── TicketPlus dry-run: {len(events)} events ────────────────")
+        for ev in events[:15]:
             print(
                 f"\n  name      : {ev.get('name')!r}\n"
+                f"  source    : {ev.get('_source_label')}\n"
                 f"  date      : {ev.get('date')}\n"
                 f"  time_start: {ev.get('time_start')}\n"
                 f"  venue_name: {ev.get('venue_name')!r}\n"
@@ -739,29 +1094,43 @@ if __name__ == "__main__":
         from scrapers.base_scraper import make_scraper_session
         from scrapers import classifier, enricher, deduplicator
         from datetime import datetime, timezone
+        from collections import defaultdict
 
         engine, db = make_scraper_session()
         now = datetime.now(timezone.utc)
-        stats = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+        totals = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+        per_source: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+        )
 
         for ev in events:
+            src = ev.get("_source_label", "unknown")
             try:
                 ev = classifier.classify(ev)
                 ev = enricher.enrich(ev, db)
                 ev.setdefault("scraped_at", now)
                 ev.setdefault("is_verified", False)
                 result = deduplicator.save_or_update(ev, db)
-                stats[result] += 1
+                totals[result] += 1
+                per_source[src][result] += 1
             except Exception as exc:
                 logger.warning("Failed to save %r: %s", ev.get("name"), exc)
                 db.rollback()
-                stats["failed"] += 1
+                totals["failed"] += 1
+                per_source[src]["failed"] += 1
 
         db.commit()
         db.close()
         engine.dispose()
 
+        print("\n── TicketPlus results per source ──────────────────────────────────────")
+        print(f"{'Source':<35} {'created':>8} {'updated':>8} {'skipped':>8} {'failed':>7}")
+        print("-" * 70)
+        for src in sorted(per_source):
+            s = per_source[src]
+            print(f"{src:<35} {s['created']:>8} {s['updated']:>8} {s['skipped']:>8} {s['failed']:>7}")
+        print("-" * 70)
         print(
-            f"\nDone — created={stats['created']}  updated={stats['updated']}  "
-            f"skipped={stats['skipped']}  failed={stats['failed']}"
+            f"{'TOTAL':<35} {totals['created']:>8} {totals['updated']:>8} "
+            f"{totals['skipped']:>8} {totals['failed']:>7}"
         )
