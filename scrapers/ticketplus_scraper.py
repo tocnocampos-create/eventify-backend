@@ -1,40 +1,49 @@
-"""TicketPlus Chile scraper — fetches events from category taxon listing pages,
-venue-specific company pages, and the GAM subdomain.
+"""TicketPlus Chile scraper — comprehensive Santiago/RM event coverage.
 
 TicketPlus (ticketplus.cl) is built on Spree Commerce (Ruby on Rails).
-Category listing pages use the /taxons/ path; company pages use /companies/{slug};
-pagination is ?page=N.  Product detail pages carry event-specific metadata in
-Spree "properties" (a table of key/value rows: Fecha, Hora, Lugar, etc.).
+Event detail pages carry metadata in Spree "properties" and JSON-LD.
 
-Scraped sources:
-    Taxon pages (category hints applied):
-        /taxons/teatros   → "Teatro"
-        /taxons/musica    → "Música"
-        /taxons/fiestas   → classifier decides
-        /taxons/familiar  → "Teatro", kids_friendly=True
+Scraping strategy (in priority order — seen_urls deduplicates across sources):
 
-    Company pages (venue_name forced to canonical DB name):
-        /companies/sala-nemesio               → Sala Nemesio Antúnez  (Cine)
-        /companies/m100                       → Matucana 100  (classifier)
-        /companies/corpartes                  → CorpArtes  (Teatro)
-        /companies/teatro-universidad-de-chile→ Teatro Universidad de Chile (Teatro)
-        /companies/planetario                 → Planetario de Santiago  (classifier)
-        /companies/gam                        → GAM  (classifier)
+1. Company pages  (venue_name forced to canonical DB name, geo filter skipped)
+   These run FIRST so the correct venue_id is resolved before the catch-all
+   processes the same event with only JSON-LD venue info.
 
-    GAM subdomain:
-        https://gam.ticketplus.cl             → venue_name forced to "GAM"
+   Cultural / performing-arts venues (Theatre, Music, etc.):
+     gran-sala-sinfonica-nacional → Gran Sala Sinfónica Nacional
+     club-subterraneo             → Club Subterráneo
+     cachafaz                     → Teatro Cachafaz
+     teatro-azares                → Teatro Azares
+     camilo-henriquez             → Teatro Camilo Henríquez
+     delpuente                    → Teatro del Puente
+     teatro-nacional-chileno      → Teatro Nacional Chileno
+     ictus                        → Teatro Ictus
+     teatro-lospleimovil          → Teatro Lospleimovil
+     teatro-la-memoria            → Teatro La Memoria
+     teatro-finis-terrae          → Teatro Finis Terrae
+     pontificia-universidad-cat.  → Teatro UC
+     sala-nemesio                 → Sala Nemesio Antúnez
+     m100                         → Matucana 100
+     corpartes                    → CorpArtes
+     teatro-universidad-de-chile  → Teatro Universidad de Chile
+     planetario-huechuraba        → Planetario de Santiago
+     gam                          → GAM (usually empty; gam-subdomain covers it)
 
-Only Región Metropolitana events are kept for taxon pages (SANTIAGO_TOKENS).
-Company pages and GAM subdomain skip the geo filter — venue is already known RM.
+2. /states/region-metropolitana  (catch-all RM page, 337+ event links)
+   Runs after company pages; anything not already in seen_urls gets fetched.
+   Enricher resolves venue from JSON-LD location.name.
 
-source_url is the canonical product detail URL — stable across re-scrapes.
+3. GAM subdomain  https://gam.ticketplus.cl/events/search.json
+   56 upcoming GAM events, venue forced to "GAM".
+
+source_url is the canonical /events/{slug} URL — stable across re-scrapes.
 
 Run:
     python scrapers/ticketplus_scraper.py --dry-run
     python scrapers/ticketplus_scraper.py --dry-run --verbose
-    python scrapers/ticketplus_scraper.py --source teatros --dry-run
-    python scrapers/ticketplus_scraper.py --debug --source musica
-    python scrapers/ticketplus_scraper.py --source gam --dry-run
+    python scrapers/ticketplus_scraper.py --source company:corpartes --dry-run
+    python scrapers/ticketplus_scraper.py --source states-rm --dry-run
+    python scrapers/ticketplus_scraper.py --source gam-subdomain --dry-run
 """
 from __future__ import annotations
 
@@ -67,30 +76,39 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://ticketplus.cl"
 
-# Category taxon pages to scrape.
-# Each tuple: (slug, category_hint, kids_friendly, lock_category)
-# lock_category=True means _locked_category sentinel is set (classifier cannot override).
-CATEGORY_CONFIG: list[tuple[str, str | None, bool, bool]] = [
-    ("teatros",  "Teatro",  False, True),
-    ("musica",   "Música",  False, True),
-    ("fiestas",  None,      False, False),   # classifier decides freely
-    ("familiar", "Teatro",  True,  True),
-]
-
-# Company pages — each corresponds to a known RM venue in the DB.
-# Forcing venue_name_override bypasses fuzzy matching and prevents the
-# enricher from falling back to "Plaza de Armas" or creating a duplicate.
-# Each tuple: (company_slug, canonical_venue_name, category_hint, lock_category)
+# ── Company pages ─────────────────────────────────────────────────────────────
+# Each corresponds to a known RM venue in the DB.  venue_name_override is
+# forced before the enricher runs so the correct venue_id is always resolved.
+# tuple: (company_slug, canonical_venue_name, category_hint, lock_category)
 COMPANY_CONFIG: list[tuple[str, str, str | None, bool]] = [
-    ("sala-nemesio",                "Sala Nemesio Antúnez",        None,     False),
-    ("m100",                        "Matucana 100",                 None,     False),
-    ("corpartes",                   "CorpArtes",                    "Teatro", True),
-    ("teatro-universidad-de-chile", "Teatro Universidad de Chile",  "Teatro", True),
-    ("planetario-huechuraba",       "Planetario de Santiago",       None,     False),
-    ("gam",                         "GAM",                          None,     False),
+    # Performing arts & cultural centres
+    ("gran-sala-sinfonica-nacional",             "Gran Sala Sinfónica Nacional", "Música",  True),
+    ("club-subterraneo",                         "Club Subterráneo",              "Música",  False),
+    ("cachafaz",                                 "Teatro Cachafaz",               "Teatro",  True),
+    ("teatro-azares",                            "Teatro Azares",                 "Teatro",  True),
+    ("camilo-henriquez",                         "Teatro Camilo Henríquez",       "Teatro",  True),
+    ("delpuente",                                "Teatro del Puente",             "Teatro",  True),
+    ("teatro-nacional-chileno",                  "Teatro Nacional Chileno",       "Teatro",  True),
+    ("ictus",                                    "Teatro Ictus",                  "Teatro",  True),
+    ("teatro-lospleimovil",                      "Teatro Lospleimovil",           "Teatro",  True),
+    ("teatro-la-memoria",                        "Teatro La Memoria",             "Teatro",  True),
+    ("teatro-finis-terrae",                      "Teatro Finis Terrae",           "Teatro",  True),
+    ("pontificia-universidad-catolica-de-chile", "Teatro UC",                     "Teatro",  True),
+    # Already-configured venues (kept for compatibility)
+    ("sala-nemesio",                             "Sala Nemesio Antúnez",          None,      False),
+    ("m100",                                     "Matucana 100",                  None,      False),
+    ("corpartes",                                "CorpArtes",                     "Teatro",  True),
+    ("teatro-universidad-de-chile",              "Teatro Universidad de Chile",   "Teatro",  True),
+    ("planetario-huechuraba",                    "Planetario de Santiago",        None,      False),
+    ("gam",                                      "GAM",                           None,      False),
 ]
 
-# GAM subdomain — same Spree structure, events also attributed to GAM venue.
+# ── Región Metropolitana catch-all ────────────────────────────────────────────
+# All RM events on a single HTML page (337+ links, no pagination).
+# Runs AFTER company pages so seen_urls deduplication skips already-covered events.
+STATES_RM_URL = "https://ticketplus.cl/states/region-metropolitana"
+
+# ── GAM subdomain ─────────────────────────────────────────────────────────────
 GAM_SUBDOMAIN  = "https://gam.ticketplus.cl"
 GAM_VENUE_NAME = "GAM"
 
@@ -567,19 +585,26 @@ class TicketPlusScraper(BaseScraper):
         lock: bool,
         all_events: list[dict[str, Any]],
         seen_urls: set[str],
+        start_url: str | None = None,
+        skip_geo_filter: bool = True,
+        kids: bool = False,
     ) -> None:
-        """Scrape a TicketPlus company page by extracting all /events/{slug} links
-        directly from the HTML, then fetching each event detail page.
+        """Scrape a TicketPlus company page (or any TP listing URL) by extracting
+        all /events/{slug} links directly from the HTML, then fetching each detail page.
 
-        Company pages embed event links statically (unlike taxon pages which are
-        JS-rendered), so we can bypass the generic card-detection logic and collect
-        every event URL in one pass.  Pagination is handled by following the
-        rel="next" link.
+        Pages with static event links (company pages, states/region-metropolitana)
+        work well here.  Pagination follows rel="next" links.
+
+        Args:
+            start_url:       Full URL to start from.  Defaults to
+                             {BASE_URL}/companies/{company_slug}.
+            skip_geo_filter: False = apply SANTIAGO_TOKENS filter on event address.
+                             True (default) = company/RM pages are already RM-scoped.
         """
-        url: str | None = f"{BASE_URL}/companies/{company_slug}"
+        url: str | None = start_url or f"{BASE_URL}/companies/{company_slug}"
         page = 1
 
-        logger.info("[ticketplus] Scraping company page %r — %s", source_label, url)
+        logger.info("[ticketplus] Scraping page %r — %s", source_label, url)
 
         while url and page <= self.max_pages:
             soup = self._get_soup(url)
@@ -633,11 +658,30 @@ class TicketPlusScraper(BaseScraper):
                 if venue_name_override:
                     ev["venue_name"] = venue_name_override
 
+                # Optional geo filter (used for the RM catch-all page to drop
+                # any stray non-RM event that slipped into the listing)
+                if not skip_geo_filter:
+                    loc_hint = (
+                        ev.get("venue_name", "") + " "
+                        + ev.get("address", "") + " "
+                        + ev.get("name", "")
+                    )
+                    if not _is_santiago(loc_hint):
+                        logger.debug(
+                            "[ticketplus] [%s] Non-RM event %r — skipping",
+                            source_label, ev.get("name"),
+                        )
+                        seen_urls.add(detail_url)   # avoid re-fetching on next run
+                        continue
+
                 if cat_hint:
                     ev.setdefault("category", cat_hint)
                     if lock:
                         ev["_locked_category"] = cat_hint
+                if kids:
+                    ev["kids_friendly"] = True
 
+                ev["_source_label"] = source_label
                 seen_urls.add(detail_url)
                 all_events.append(ev)
                 page_new += 1
@@ -906,35 +950,21 @@ class TicketPlusScraper(BaseScraper):
     # ── Public fetch_events ───────────────────────────────────────────────────
 
     def fetch_events(self) -> list[dict[str, Any]]:
-        """Fetch Región Metropolitana events from all configured sources.
+        """Fetch all Santiago/RM events from TicketPlus.
 
-        Sources (in order):
-          1. Taxon listing pages — RM geo filter applied
-          2. Company pages — venue_name forced, geo filter skipped
-          3. GAM subdomain  — venue_name forced to "GAM", geo filter skipped
+        Execution order (seen_urls deduplicates across all sources):
+
+          1. Company pages  — venue_name forced → correct venue_id in DB
+          2. /states/region-metropolitana — catch-all for events not covered
+             by company pages; enricher resolves venue from JSON-LD
+          3. GAM subdomain  — /events/search.json API, venue forced to "GAM"
 
         Returns a flat list of event dicts ready for classifier + enricher.
         """
         all_events: list[dict[str, Any]] = []
         seen_urls: set[str] = set()
 
-        # ── 1. Category (taxon) pages ─────────────────────────────────────────
-        for slug, cat_hint, kids, lock in CATEGORY_CONFIG:
-            if self.max_events and len(all_events) >= self.max_events:
-                break
-            self._scrape_source(
-                start_url=f"{BASE_URL}/taxons/{slug}",
-                source_label=slug,
-                cat_hint=cat_hint,
-                lock=lock,
-                kids=kids,
-                venue_name_override=None,
-                skip_geo_filter=False,
-                all_events=all_events,
-                seen_urls=seen_urls,
-            )
-
-        # ── 2. Company pages (known RM venues) ────────────────────────────────
+        # ── 1. Company pages (explicit venue_name override) ───────────────────
         for slug, venue_name, cat_hint, lock in COMPANY_CONFIG:
             if self.max_events and len(all_events) >= self.max_events:
                 break
@@ -948,7 +978,21 @@ class TicketPlusScraper(BaseScraper):
                 seen_urls=seen_urls,
             )
 
-        # ── 3. GAM subdomain — use /events/search.json API (no pagination needed) ─
+        # ── 2. /states/region-metropolitana — RM catch-all ───────────────────
+        if STATES_RM_URL and not (self.max_events and len(all_events) >= self.max_events):
+            self._scrape_company_page(
+                company_slug="",          # unused — start_url overrides it
+                source_label="states-rm",
+                venue_name_override=None, # enricher resolves from JSON-LD
+                cat_hint=None,
+                lock=False,
+                all_events=all_events,
+                seen_urls=seen_urls,
+                start_url=STATES_RM_URL,
+                skip_geo_filter=True,     # /states/region-metropolitana is already RM-scoped
+            )
+
+        # ── 3. GAM subdomain — /events/search.json API ────────────────────────
         if GAM_SUBDOMAIN and not (self.max_events and len(all_events) >= self.max_events):
             self._scrape_from_search_json(
                 base_url=GAM_SUBDOMAIN,
@@ -1015,9 +1059,8 @@ if __name__ == "__main__":
     )
 
     _ALL_SOURCES = (
-        [s for s, *_ in CATEGORY_CONFIG]
-        + [f"company:{s}" for s, *_ in COMPANY_CONFIG]
-        + ["gam-subdomain"]
+        [f"company:{s}" for s, *_ in COMPANY_CONFIG]
+        + ["states-rm", "gam-subdomain"]
     )
 
     parser = argparse.ArgumentParser(description="TicketPlus Chile scraper")
@@ -1055,16 +1098,15 @@ if __name__ == "__main__":
         import scrapers.ticketplus_scraper as _self
         if args.source.startswith("company:"):
             slug = args.source[len("company:"):]
-            _self.CATEGORY_CONFIG = []
             _self.COMPANY_CONFIG = [c for c in COMPANY_CONFIG if c[0] == slug]
-            _self.GAM_SUBDOMAIN = ""   # skip subdomain
-        elif args.source == "gam-subdomain":
-            _self.CATEGORY_CONFIG = []
-            _self.COMPANY_CONFIG = []
-        else:
-            _self.CATEGORY_CONFIG = [c for c in CATEGORY_CONFIG if c[0] == args.source]
+            _self.STATES_RM_URL = ""
+            _self.GAM_SUBDOMAIN = ""
+        elif args.source == "states-rm":
             _self.COMPANY_CONFIG = []
             _self.GAM_SUBDOMAIN = ""
+        elif args.source == "gam-subdomain":
+            _self.COMPANY_CONFIG = []
+            _self.STATES_RM_URL = ""
 
     scraper = TicketPlusScraper(
         max_pages=args.max_pages,
