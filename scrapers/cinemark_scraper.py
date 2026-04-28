@@ -170,19 +170,92 @@ def _build_release_source_url(corporate_film_id: str) -> str:
 
 
 def _build_ticket_url(cinema_id: int, corporate_film_id: str, pelicula_slug: str) -> str:
-    """Best-effort public URL for the movie page at this cinema.
+    """Public movie page URL at Cinemark Chile.
 
-    The user can navigate from here to select their session and buy tickets.
-    Format mirrors what the Cinemark Chile widget builds:
-        /pelicula?tag={cinema_id}&corporate_film_id={film_id}&pelicula={slug}
+    Format: https://www.cinemark.cl/pelicula/{slug}
+    e.g.  : https://www.cinemark.cl/pelicula/michael
     """
-    slug = pelicula_slug or corporate_film_id
-    return (
-        f"{MOVIE_PAGE_BASE}"
-        f"?tag={cinema_id}"
-        f"&corporate_film_id={corporate_film_id}"
-        f"&pelicula={slug}"
+    slug = pelicula_slug or _slug(corporate_film_id)
+    return f"{MOVIE_PAGE_BASE}/{slug}"
+
+
+def fetch_sitemap_slugs() -> dict[str, str]:
+    """Fetch https://www.cinemark.cl/sitemap.xml and return a mapping of
+    generated-base-slug → real-sitemap-slug for all /pelicula/ entries.
+
+    The sitemap contains the canonical slugs Cinemark uses on their website
+    (e.g. 'el-castillo-ambulante-2004-ghibli-fest-2026'). Our _slug() function
+    generates shorter base slugs from the API title. We match by checking
+    whether the sitemap slug starts with the generated base slug.
+
+    Returns {} on any error so the scraper falls back to generated slugs.
+    """
+    try:
+        resp = requests.get(
+            "https://www.cinemark.cl/sitemap.xml",
+            timeout=15,
+            headers={"User-Agent": HEADERS["User-Agent"]},
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning("[cinemark] Could not fetch sitemap: %s", exc)
+        return {}
+
+    real_slugs: list[str] = re.findall(
+        r"https://www\.cinemark\.cl/pelicula/([^<\s]+)",
+        resp.text,
     )
+
+    # Build: base_slug → real_slug
+    # For each real slug, try every prefix length so that our generated slug
+    # (which may be shorter) maps to the full real slug.
+    mapping: dict[str, str] = {}
+    for real_slug in real_slugs:
+        parts = real_slug.split("-")
+        # Add the full slug as a key for exact matches
+        mapping[real_slug] = real_slug
+        # Add all sub-prefixes (min 2 tokens) so partial matches resolve
+        for n in range(2, len(parts)):
+            prefix = "-".join(parts[:n])
+            if prefix not in mapping:
+                mapping[prefix] = real_slug
+
+    logger.info("[cinemark] Sitemap loaded: %d real slugs, %d prefix keys",
+                len(real_slugs), len(mapping))
+    return mapping
+
+
+# Manual overrides for titles where the prefix-matching algorithm cannot
+# correctly map a generated slug to the real Cinemark sitemap slug.
+# Key: generated slug (output of _slug(title)); Value: real sitemap slug.
+MANUAL_SLUG_OVERRIDES: dict[str, str] = {
+    "diablo-viste-a-la-moda-2":        "el-diablo-viste-a-la-moda-2",
+    "bluey-en-cines-diversion":        "bluey-en-cines-momentos-de-diversion-con-amigos",
+    "hoppers":                         "hoppers-operacion-castor",
+    "power-to-the-people-john-y-yoko": "power-to-the-people-john-yoko-live-in-nyc",
+}
+
+
+def resolve_slug(title: str, sitemap: dict[str, str]) -> str:
+    """Return the best available slug for a movie title.
+
+    1. Check MANUAL_SLUG_OVERRIDES for known mismatches.
+    2. Generate a base slug from the title using _slug().
+    3. Look it up in the sitemap prefix mapping.
+    4. Fall back to the generated slug if no sitemap match found.
+    """
+    base = _slug(title)
+    # Manual overrides take highest priority
+    if base in MANUAL_SLUG_OVERRIDES:
+        return MANUAL_SLUG_OVERRIDES[base]
+    # Also try stripping format suffix before slugifying
+    base_no_fmt = _slug(re.sub(r"\s*\([^)]*\)\s*$", "", title).strip())
+    if base_no_fmt in MANUAL_SLUG_OVERRIDES:
+        return MANUAL_SLUG_OVERRIDES[base_no_fmt]
+    for candidate in (base, base_no_fmt):
+        if candidate in sitemap:
+            return sitemap[candidate]
+    return base
 
 
 def _extract_poster(film: dict[str, Any]) -> str | None:
@@ -195,8 +268,14 @@ def _extract_poster(film: dict[str, Any]) -> str | None:
 
 
 def _slug(title: str) -> str:
-    """Convert a movie title to a URL-safe slug (lowercase, hyphens)."""
+    """Convert a movie title to a URL-safe slug (lowercase, hyphens).
+
+    Strips trailing [bracket annotations] (e.g. [2004], [SUBT]) that
+    Cinemark's API appends to re-release titles before slugifying.
+    """
     s = title.lower().strip()
+    # Remove all [bracket annotations] — API-internal tags not part of the URL
+    s = re.sub(r"\s*\[[^\]]*\]", "", s).strip()
     s = re.sub(r"[áàä]", "a", s)
     s = re.sub(r"[éèë]", "e", s)
     s = re.sub(r"[íìï]", "i", s)
@@ -450,7 +529,10 @@ class CinemarkScraper(BaseScraper):
 
         price_range = self._get_session_price(session)
 
-        ticket_url = _build_ticket_url(cinema_id, corporate_film_id, _slug(title))
+        ticket_url = _build_ticket_url(
+            cinema_id, corporate_film_id,
+            resolve_slug(title, getattr(self, "_sitemap", {})),
+        )
         source_url = _build_source_url(cinema_id, corporate_film_id, date, time_start)
 
         event: dict[str, Any] = {
@@ -519,8 +601,7 @@ class CinemarkScraper(BaseScraper):
             synopsis = synopsis.strip()[:1500]
 
         source_url = _build_release_source_url(corporate_film_id)
-        # Point to the general peliculas page since no cinema is selected yet
-        ticket_url = f"{MOVIE_PAGE_BASE}?corporate_film_id={corporate_film_id}&coming_soon=true"
+        ticket_url = f"{MOVIE_PAGE_BASE}/{resolve_slug(title, getattr(self, '_sitemap', {}))}"
 
         event: dict[str, Any] = {
             "name": title,
@@ -557,6 +638,10 @@ class CinemarkScraper(BaseScraper):
 
         Returns a flat list of event dicts ready for classifier + enricher.
         """
+        # Load sitemap once per run so resolve_slug() can map generated
+        # base slugs to the full canonical slugs Cinemark uses on their site.
+        self._sitemap = fetch_sitemap_slugs()
+
         all_events: list[dict[str, Any]] = []
         seen_source_urls: set[str] = set()
 
@@ -757,6 +842,19 @@ if __name__ == "__main__":
                 stats["failed"] += 1
 
         db.commit()
+
+        # ── TMDB metadata enrichment ──────────────────────────────────────────
+        try:
+            from scrapers.tmdb_enricher import apply_tmdb_to_cinema_events
+            tmdb = apply_tmdb_to_cinema_events(db)
+            print(f"TMDB  — enriched={tmdb['enriched']}  "
+                  f"trailers_added={tmdb['trailers_added']}  "
+                  f"not_found={tmdb['not_found']}")
+        except EnvironmentError as exc:
+            print(f"\nTMDB enrichment skipped — {exc}")
+        except Exception as exc:
+            logger.warning("TMDB enrichment failed: %s", exc)
+
         db.close()
         engine.dispose()
 

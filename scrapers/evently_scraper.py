@@ -595,7 +595,7 @@ class EventlyScraper(BaseScraper):
 
     def __init__(
         self,
-        max_pages:  int  = 5,
+        max_pages:  int  = 10,
         max_events: int  = 0,
         debug:      bool = False,
     ) -> None:

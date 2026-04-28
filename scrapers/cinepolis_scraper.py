@@ -105,8 +105,41 @@ HEADERS = {
 
 REQUEST_DELAY = 1  # seconds between POST calls
 
-# Base URL for public movie/ticket pages (used to build the event url)
-TICKET_BASE = "https://cinepolischile.cl/comprar-boletos"
+# Hardcoded VistaId → exact cartelera URL.
+# Generated slugs were verified to return HTTP 200 on 2026-04-26, but a static
+# mapping is more robust — no slug logic to break if the site renames a cinema.
+# Key: str(VistaId)   Value: full URL (no trailing slash)
+CINEPOLIS_CARTELERA_URLS: dict[str, str] = {
+    # Santiago Centro
+    "712":  "https://cinepolischile.cl/cartelera/santiago-centro/arauco-estacion",
+    "916":  "https://cinepolischile.cl/cartelera/santiago-centro/cinepolis-vivo-imperio",
+    # Santiago Oriente
+    "707":  "https://cinepolischile.cl/cartelera/santiago-oriente/cinepolis-la-reina",
+    "708":  "https://cinepolischile.cl/cartelera/santiago-oriente/parque-arauco",
+    "709":  "https://cinepolischile.cl/cartelera/santiago-oriente/parque-arauco-premium-class",
+    "722":  "https://cinepolischile.cl/cartelera/santiago-oriente/paseo-los-dominicos-san-carlos",
+    "726":  "https://cinepolischile.cl/cartelera/santiago-oriente/cinepolis-paseo-los-trapenses",
+    "729":  "https://cinepolischile.cl/cartelera/santiago-oriente/cinepolis-mallplaza-egana",
+    "760":  "https://cinepolischile.cl/cartelera/santiago-oriente/cinepolis-mallplaza-egana-premium-class",
+    "824":  "https://cinepolischile.cl/cartelera/santiago-oriente/cinepolis-casa-costanera",
+    "918":  "https://cinepolischile.cl/cartelera/santiago-oriente/cinepolis-mallplaza-los-dominicos",
+    "919":  "https://cinepolischile.cl/cartelera/santiago-oriente/cinepolis-mallplaza-los-dominicos-premium-class",
+    # Santiago Poniente y Norte
+    "710":  "https://cinepolischile.cl/cartelera/santiago-poniente-y-norte/arauco-maipu",
+    "724":  "https://cinepolischile.cl/cartelera/santiago-poniente-y-norte/arauco-quilicura",
+    "727":  "https://cinepolischile.cl/cartelera/santiago-poniente-y-norte/espacio-urbano-melipilla",
+    "981":  "https://cinepolischile.cl/cartelera/santiago-poniente-y-norte/boulevard-terrazas-maipu",
+    "1091": "https://cinepolischile.cl/cartelera/santiago-poniente-y-norte/cinepolis-patio-outlet-maipu",
+    "1349": "https://cinepolischile.cl/cartelera/santiago-poniente-y-norte/santa-maria-de-melipilla",
+    # Santiago Sur
+    "713":  "https://cinepolischile.cl/cartelera/santiago-sur/cinepolis-plazuela-independencia-puente-alto",
+    "718":  "https://cinepolischile.cl/cartelera/santiago-sur/mallplaza-sur",
+    "725":  "https://cinepolischile.cl/cartelera/santiago-sur/paseo-san-bernardo",
+    "1089": "https://cinepolischile.cl/cartelera/santiago-sur/cinepolis-patio-outlet-la-florida",
+    "1259": "https://cinepolischile.cl/cartelera/santiago-sur/cinepolis-espacio-urbano-puente-alto",
+}
+
+_CARTELERA_FALLBACK = "https://cinepolischile.cl/cartelera"
 
 # Spanish month names for date parsing
 _MONTHS_ES: dict[str, int] = {
@@ -302,19 +335,12 @@ def _build_source_url(vista_id: str, showtime_id: str) -> str:
     return f"cinepolis:cl:{vista_id}:{showtime_id}"
 
 
-def _build_ticket_url(vista_id: str, showtime_id: str) -> str:
-    """Public purchase URL for this session.
+def _cartelera_url(vista_id: str) -> str:
+    """Return the verified cartelera URL for a cinema by its VistaId.
 
-    Cinépolis Chile ticket flow uses:
-        /Compra?vistaId={id}&showtimeId={id}
-    Falls back to the cartelera page if VistaId is empty.
+    Falls back to the sector cartelera index if the VistaId is unknown.
     """
-    if vista_id and showtime_id:
-        return (
-            f"https://cinepolischile.cl/Compra"
-            f"?vistaId={vista_id}&showtimeId={showtime_id}"
-        )
-    return "https://cinepolischile.cl/Cartelera.aspx"
+    return CINEPOLIS_CARTELERA_URLS.get(str(vista_id), _CARTELERA_FALLBACK)
 
 
 # ── Scraper class ─────────────────────────────────────────────────────────────
@@ -427,10 +453,10 @@ class CinepolisScraper(BaseScraper):
             # Fallback: synthetic key from cinema+date+time
             showtime_id = f"{cinema.get('Name', '')}:{date}:{time_start}"
 
-        source_url = _build_source_url(vista_id, showtime_id)
-        ticket_url = _build_ticket_url(vista_id, showtime_id)
-
         cinema_name = (cinema.get("Name") or cinema.get("name") or "").strip()
+
+        source_url = _build_source_url(vista_id, showtime_id)
+        ticket_url = _cartelera_url(vista_id)
 
         # New API: format name lives in Formats[].Name (e.g. "4DX 3D ESP", "ESP").
         # Strip language tokens; an empty result means standard 2D.
@@ -524,7 +550,7 @@ class CinepolisScraper(BaseScraper):
                                     continue
 
                                 ev = self._build_event(
-                                    cinema, movie, date_entry, showtime, format_entry
+                                    cinema, movie, date_entry, showtime, format_entry,
                                 )
                                 if ev is None:
                                     continue
@@ -683,6 +709,19 @@ if __name__ == "__main__":
                 stats["failed"] += 1
 
         db.commit()
+
+        # ── TMDB metadata enrichment ──────────────────────────────────────────
+        try:
+            from scrapers.tmdb_enricher import apply_tmdb_to_cinema_events
+            tmdb = apply_tmdb_to_cinema_events(db)
+            print(f"TMDB  — enriched={tmdb['enriched']}  "
+                  f"trailers_added={tmdb['trailers_added']}  "
+                  f"not_found={tmdb['not_found']}")
+        except EnvironmentError as exc:
+            print(f"\nTMDB enrichment skipped — {exc}")
+        except Exception as exc:
+            logger.warning("TMDB enrichment failed: %s", exc)
+
         db.close()
         engine.dispose()
 

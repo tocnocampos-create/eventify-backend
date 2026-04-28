@@ -24,7 +24,15 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 # Fields that are re-fetched on every scrape run and may legitimately change.
-_MUTABLE_FIELDS = ("price_range", "date", "image_url", "scraped_at", "time_start", "time_end", "url", "is_sold_out")
+# description/image_url: enriched by TMDB or updated by source.
+# venue_id/venue_name: enricher resolves venue_id on first successful match;
+#   subsequent runs keep it up-to-date if the venue row changes.
+# category/keywords: re-classification may improve these as the classifier rules evolve.
+_MUTABLE_FIELDS = (
+    "price_range", "date", "image_url", "scraped_at",
+    "time_start", "time_end", "url", "is_sold_out",
+    "description", "venue_id", "venue_name", "category", "keywords",
+)
 
 # All Event model columns that may appear in a scraped event dict.
 _ALLOWED_FIELDS = {

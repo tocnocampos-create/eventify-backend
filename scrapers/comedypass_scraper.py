@@ -414,6 +414,10 @@ class ComedyPassScraper(BaseScraper):
                     else:
                         ev.setdefault(key, val)
 
+                # Ensure is_sold_out is always present so the deduplicator can
+                # reset stale True values in the DB when stock is restored.
+                ev.setdefault("is_sold_out", False)
+
                 # Category hint: let classifier decide with keyword rules;
                 # fall back to Comedia (the venue's primary offering).
                 hint = _category_hint(ev.get("name", ""), ev.get("description", ""))

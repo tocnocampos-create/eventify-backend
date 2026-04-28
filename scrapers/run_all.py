@@ -18,7 +18,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Allow importing both app.* and scrapers.* when run as a standalone script
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -132,6 +132,86 @@ def _print_sample(events: list[dict], n: int = 5, verbose: bool = False) -> None
             print(f"    description : {(desc[:200] + '…') if len(desc) > 200 else desc!r}")
 
 
+# ── Post-pipeline steps ───────────────────────────────────────────────────────
+
+def _run_tmdb_enrichment(db) -> None:
+    """Enrich all Cine events with TMDB descriptions, posters, and trailer links.
+
+    Called after all cinema scrapers have run so new sessions created in this
+    run are enriched in the same pipeline execution.  Skipped gracefully when
+    TMDB_READ_ACCESS_TOKEN is not set (e.g. local dev without the token).
+    """
+    try:
+        from scrapers.tmdb_enricher import apply_tmdb_to_cinema_events  # noqa: PLC0415
+        stats = apply_tmdb_to_cinema_events(db)
+        logger.info(
+            "[tmdb] enriched=%d  trailers_added=%d  not_found=%d",
+            stats["enriched"], stats["trailers_added"], stats["not_found"],
+        )
+    except EnvironmentError as exc:
+        logger.warning("[tmdb] Skipping enrichment — %s", exc)
+    except Exception as exc:
+        logger.error("[tmdb] Enrichment failed: %s", exc, exc_info=True)
+
+
+def _cleanup_expired_events(db, dry_run: bool = False) -> dict[str, int]:
+    """Delete events whose dates have passed beyond the retention window.
+
+    Retention policy:
+      - Cine events (session-level):  delete if date < today - 14 days
+      - All other events:             delete if date < today - 60 days
+
+    Cinema sessions are short-lived (1 showtime per row) so a 14-day window
+    is generous.  Live/theatre/music events may span weeks, so 60 days.
+
+    Returns {"cine_deleted": N, "other_deleted": N}.
+    """
+    from sqlalchemy import text  # noqa: PLC0415
+
+    cutoff_cine  = (datetime.now(timezone.utc) - timedelta(days=14)).date()
+    cutoff_other = (datetime.now(timezone.utc) - timedelta(days=60)).date()
+
+    stats = {"cine_deleted": 0, "other_deleted": 0}
+
+    if dry_run:
+        # Count-only mode — log what would be deleted without touching the DB
+        res_cine = db.execute(
+            text("SELECT COUNT(*) FROM events WHERE category = 'Cine' AND date < :cutoff"),
+            {"cutoff": str(cutoff_cine)},
+        ).scalar()
+        res_other = db.execute(
+            text("SELECT COUNT(*) FROM events WHERE category != 'Cine' AND date < :cutoff"),
+            {"cutoff": str(cutoff_other)},
+        ).scalar()
+        logger.info(
+            "[cleanup] DRY-RUN — would delete %d Cine events (before %s) "
+            "and %d other events (before %s)",
+            res_cine or 0, cutoff_cine, res_other or 0, cutoff_other,
+        )
+        return {"cine_deleted": res_cine or 0, "other_deleted": res_other or 0}
+
+    res_cine = db.execute(
+        text("DELETE FROM events WHERE category = 'Cine' AND date < :cutoff"),
+        {"cutoff": str(cutoff_cine)},
+    )
+    stats["cine_deleted"] = res_cine.rowcount
+
+    res_other = db.execute(
+        text("DELETE FROM events WHERE category != 'Cine' AND date < :cutoff"),
+        {"cutoff": str(cutoff_other)},
+    )
+    stats["other_deleted"] = res_other.rowcount
+
+    db.commit()
+    logger.info(
+        "[cleanup] Deleted %d expired Cine events (cutoff %s) "
+        "and %d other expired events (cutoff %s)",
+        stats["cine_deleted"], cutoff_cine,
+        stats["other_deleted"], cutoff_other,
+    )
+    return stats
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -187,6 +267,17 @@ def main() -> None:
             except Exception as exc:
                 logger.error("Scraper %s crashed: %s", scraper.name, exc, exc_info=True)
 
+    # ── Post-pipeline: TMDB enrichment ───────────────────────────────────────
+    if not args.dry_run:
+        logger.info("━━━ Running TMDB enrichment ━━━")
+        with Session() as db:
+            _run_tmdb_enrichment(db)
+
+    # ── Post-pipeline: expired event cleanup ──────────────────────────────────
+    logger.info("━━━ Running expired event cleanup ━━━")
+    with Session() as db:
+        cleanup = _cleanup_expired_events(db, dry_run=args.dry_run)
+
     engine.dispose()
 
     # ── Final summary ─────────────────────────────────────────────────────────
@@ -198,6 +289,7 @@ def main() -> None:
     print(f"  Updated: {totals['updated']}")
     print(f"  Skipped: {totals['skipped']}")
     print(f"  Failed:  {totals['failed']}")
+    print(f"  Cleaned: {cleanup['cine_deleted']} Cine + {cleanup['other_deleted']} other expired")
     print("━" * 50)
 
 
