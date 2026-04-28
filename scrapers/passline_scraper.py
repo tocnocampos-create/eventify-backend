@@ -443,16 +443,27 @@ class PasslineScraper(BaseScraper):
                 break
 
         # ── Price ─────────────────────────────────────────────────────────────
-        raw_price = (
-            raw.get("precio_min")                             # Passline API field
-            or raw.get("price")
-            or raw.get("price_range")
-            or raw.get("precio")
-            or raw.get("prices")
-            or raw.get("ticket_price")
-            or raw.get("min_price")
-        )
-        price_range = _parse_price(raw_price)
+        # Passline returns precio_min as a decimal string: "2500.00", "0.00".
+        # _parse_price's Chilean-format path strips ALL dots (for "$15.000"
+        # thousand-separator notation), which corrupts "2500.00" → 250000.
+        # Parse precio_min directly as a float to avoid the 100× inflation.
+        precio_min_raw = raw.get("precio_min")
+        if precio_min_raw is not None and str(precio_min_raw).strip():
+            try:
+                v = float(str(precio_min_raw).strip())
+                price_range = [0.0, 0.0] if v == 0 else [v, v]
+            except (ValueError, TypeError):
+                price_range = _parse_price(
+                    raw.get("price") or raw.get("price_range")
+                    or raw.get("precio") or raw.get("prices")
+                    or raw.get("ticket_price") or raw.get("min_price")
+                )
+        else:
+            price_range = _parse_price(
+                raw.get("price") or raw.get("price_range")
+                or raw.get("precio") or raw.get("prices")
+                or raw.get("ticket_price") or raw.get("min_price")
+            )
 
         # ── Sold out ──────────────────────────────────────────────────────────
         # API returns "agotado": "1" when sold out, "0" otherwise
