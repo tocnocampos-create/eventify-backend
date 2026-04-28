@@ -116,10 +116,13 @@ _SUBSCRIPTION_KEYWORDS: tuple[str, ...] = (
     "campaña",
     "membres",        # membresía / membresia
     "acceso abonado",
+    "acceso especial",
+    "acceso vip",
     "temporada",
     "pase de temporada",
     "pase anual",
     "suscripci",      # suscripción / suscripcion
+    " vs ",           # sports matchday passes (e.g. "Team A vs Team B")
 )
 
 # If fecha_termino − fecha_inicio exceeds this many days the listing is
