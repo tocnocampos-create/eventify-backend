@@ -13,14 +13,20 @@ API:
         "offset":     "1",
         "tag":        null,
         "tag_id":     null,
-        "text":       ""
+        "text":       "",
+        "region":     "13",           # Región Metropolitana — server-side RM filter
     }
+
+The API is protected by Cloudflare Bot Management.  Simple requests with a
+plain User-Agent are blocked with HTTP 403 (Cf-Mitigated: challenge).
+Fix: use curl-cffi (pip install curl-cffi) which impersonates Chrome at the
+TLS/HTTP2 fingerprint level.  A session warm-up GET to passline.com obtains
+the __cf_bm bot-management cookie before the API POST is made.
 
 The scraper issues requests for a rolling 60-day window from today,
 paginating in batches of 300 until the API returns fewer than 300 records.
-
-Only Santiago events are kept — the commune / venue / location fields are
-checked against SANTIAGO_TOKENS (imported from puntoticket_scraper).
+RM filter is applied server-side via "region": "13"; SANTIAGO_TOKENS check
+provides a secondary client-side guard.
 
 Each event in the response becomes one DB Event row.
 Category and type are left to the classifier — Passline covers all
@@ -55,7 +61,14 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import requests
+# curl-cffi impersonates real Chrome TLS/HTTP2 fingerprints — required to pass
+# Cloudflare Bot Management on api.passline.com (plain requests → 403).
+try:
+    from curl_cffi import requests as _cf_requests  # type: ignore[import]
+    _HAS_CURL_CFFI = True
+except ImportError:  # pragma: no cover
+    import requests as _cf_requests  # type: ignore[assignment]
+    _HAS_CURL_CFFI = False
 
 from scrapers.base_scraper import BaseScraper
 from scrapers.puntoticket_scraper import SANTIAGO_TOKENS
@@ -90,6 +103,12 @@ REQUEST_DELAY = 2  # seconds between paginated requests
 # Public base URL for ticket / event detail pages
 WEB_BASE = "https://passline.com"
 
+# Warm-up URL — visited once per session so Cloudflare issues __cf_bm cookie
+WARMUP_URL = "https://passline.com"
+
+# Server-side region filter — 13 = Región Metropolitana de Santiago
+RM_REGION = "13"
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -116,6 +135,7 @@ def _build_body(start_date: str, end_date: str, offset: int) -> dict:
         "tag":        None,
         "tag_id":     None,
         "text":       "",
+        "region":     RM_REGION,   # server-side RM filter — reduces payload and false positives
     }
 
 
@@ -302,7 +322,10 @@ class PasslineScraper(BaseScraper):
         self.max_events = max_events
         self.debug = debug
 
-        self.session = requests.Session()
+        if _HAS_CURL_CFFI:
+            self.session = _cf_requests.Session(impersonate="chrome120")
+        else:
+            self.session = _cf_requests.Session()
         self.session.headers.update(HEADERS)
 
     # ── HTTP helper ───────────────────────────────────────────────────────────
@@ -317,7 +340,7 @@ class PasslineScraper(BaseScraper):
             resp = self.session.post(API_URL, json=body, timeout=30)
             resp.raise_for_status()
             data = resp.json()
-        except requests.RequestException as exc:
+        except _cf_requests.RequestException as exc:
             logger.error("[passline] POST failed (offset=%d): %s", offset, exc)
             return []
         except ValueError as exc:
@@ -374,19 +397,23 @@ class PasslineScraper(BaseScraper):
         ticket_url = _build_ticket_url(raw)
 
         # ── Location / Santiago filter ────────────────────────────────────────
-        commune = _get_str(
+        # API field is "nombre_communa" (HTML-encoded); decode before use.
+        import html as _html  # noqa: PLC0415
+        commune_raw = _get_str(
             raw,
-            "commune", "comuna", "city", "ciudad", "location",
-            "venue_commune", "venue_city",
+            "nombre_communa", "commune", "comuna", "city", "ciudad",
+            "location", "venue_commune", "venue_city",
         )
+        commune = _html.unescape(commune_raw)
         venue_name = _get_str(
             raw,
             "venue_name", "venue", "recinto", "lugar",
             "venue_title", "place", "place_name",
         )
-        region = _get_str(raw, "region", "region_name")
+        region = _get_str(raw, "nombre_region", "region", "region_name")
 
-        # Build one string for Santiago detection
+        # server-side region=13 filter already limits to RM; keep token check
+        # as a secondary guard to exclude edge-case non-Santiago RM venues.
         location_hint = f"{commune} {venue_name} {region} {name}"
         if not _is_santiago(location_hint):
             return None
@@ -394,6 +421,7 @@ class PasslineScraper(BaseScraper):
         # ── Image ─────────────────────────────────────────────────────────────
         image_url = None
         for key in (
+            "miniatura", "recorte",                           # Passline API fields
             "image", "image_url", "imageUrl", "imagen",
             "thumbnail", "banner", "cover", "photo",
             "image_banner", "poster",
@@ -416,7 +444,8 @@ class PasslineScraper(BaseScraper):
 
         # ── Price ─────────────────────────────────────────────────────────────
         raw_price = (
-            raw.get("price")
+            raw.get("precio_min")                             # Passline API field
+            or raw.get("price")
             or raw.get("price_range")
             or raw.get("precio")
             or raw.get("prices")
@@ -425,8 +454,12 @@ class PasslineScraper(BaseScraper):
         )
         price_range = _parse_price(raw_price)
 
+        # ── Sold out ──────────────────────────────────────────────────────────
+        # API returns "agotado": "1" when sold out, "0" otherwise
+        is_sold_out = str(raw.get("agotado", "0")) == "1"
+
         # ── Category hint — let classifier decide; provide hint if API gives one ──
-        raw_category = _get_str(raw, "category", "categoria", "type", "tipo", "genre")
+        raw_category = _get_str(raw, "category_name", "category", "categoria", "type", "tipo", "genre")
 
         # ── Assemble event ────────────────────────────────────────────────────
         event: dict[str, Any] = {
@@ -445,6 +478,8 @@ class PasslineScraper(BaseScraper):
             event["description"] = description
         if price_range is not None:
             event["price_range"] = price_range
+        if is_sold_out:
+            event["is_sold_out"] = True
         if raw_category:
             # Pass as a hint; classifier may override unless _locked_category is set
             event["_category_hint"] = raw_category
@@ -461,6 +496,14 @@ class PasslineScraper(BaseScraper):
 
         Returns a flat list of event dicts ready for classifier + enricher.
         """
+        # Warm up the session so Cloudflare issues a __cf_bm cookie before the
+        # first API POST (required when curl_cffi is available).
+        try:
+            self.session.get(WARMUP_URL, timeout=15)
+            logger.debug("[passline] Warmup GET complete")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[passline] Warmup GET failed (continuing): %s", exc)
+
         start_date, end_date = _date_window()
         logger.info(
             "[passline] Window: %s → %s (WINDOW_DAYS=%d)",
