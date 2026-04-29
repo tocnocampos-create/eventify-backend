@@ -65,6 +65,7 @@ class VenueBase(BaseModel):
     coordinates: List[float] = Field(..., min_items=2, max_items=2, description="[latitude, longitude]")
     schedule: Optional[time] = None
     city: Optional[str] = Field(None, max_length=100)
+    address: Optional[str] = Field(None, max_length=500)
     cover_image_url: Optional[str] = Field(None, max_length=500)
     profile_image_url: Optional[str] = Field(None, max_length=500)
     website_url: Optional[str] = Field(None, max_length=500)
@@ -86,6 +87,7 @@ class VenueUpdate(BaseModel):
     coordinates: Optional[List[float]] = None
     schedule: Optional[time] = None
     city: Optional[str] = Field(None, max_length=100)
+    address: Optional[str] = Field(None, max_length=500)
     cover_image_url: Optional[str] = Field(None, max_length=500)
     profile_image_url: Optional[str] = Field(None, max_length=500)
     website_url: Optional[str] = Field(None, max_length=500)

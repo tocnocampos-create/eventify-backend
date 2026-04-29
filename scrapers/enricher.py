@@ -218,6 +218,7 @@ def _create_venue(venue_name: str, event: dict[str, Any], db: Session, Venue: An
         venue_type=venue_type,
         coordinates=coords,
         city="Santiago",
+        address=event.get("address") or None,
         is_verified=False,
         scraped_at=datetime.now(timezone.utc),
         description=None,
@@ -369,6 +370,9 @@ def enrich(event: dict[str, Any], db: Session) -> dict[str, Any]:
         event["venue_id"] = venue.id
         if not event.get("venue_type"):
             event["venue_type"] = venue.venue_type
+        # Backfill address on the venue row if we have new data and it was blank
+        if not venue.address and event.get("address"):
+            venue.address = event["address"]
         logger.debug(
             "Matched venue %r → id=%d  type=%s",
             venue_name, venue.id, venue.venue_type,

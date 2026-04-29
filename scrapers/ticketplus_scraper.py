@@ -136,6 +136,24 @@ _PROP_ADDR  = {"dirección", "direccion", "address", "domicilio", "ubicación", 
 
 # ── HTML helpers ──────────────────────────────────────────────────────────────
 
+# Matches trailing ISO datetime noise appended to Spree slugs/page-titles:
+#   "La Elegida 2026 04 29 20 30 00 0400"
+#   "Concierto 2026-04-29T20:30:00-04:00"
+#   "Show 2026 04 29"
+_TRAILING_DATETIME_RE = re.compile(
+    r"\s+\d{4}[\s\-]\d{1,2}[\s\-]\d{1,2}"   # YYYY-MM-DD or YYYY MM DD
+    r"(?:[\sT:]\d{1,2}){0,6}"                # optional HH MM SS
+    r"(?:\s*[+\-]\d{4})?"                    # optional timezone offset ±HHMM
+    r"\s*$",
+    re.I,
+)
+
+
+def _clean_title(title: str) -> str:
+    """Strip trailing date/time garbage from Spree-generated event titles."""
+    return _TRAILING_DATETIME_RE.sub("", title).strip()
+
+
 def _absolute_url(href: str, base: str = BASE_URL) -> str:
     if href.startswith("http"):
         return href
@@ -457,16 +475,18 @@ class TicketPlusScraper(BaseScraper):
                         continue
 
                     # ── Event JSON-LD ──────────────────────────────────────────
-                    # Date + time
+                    # Date + time — extract startDate regardless of whether date
+                    # was already set from the Spree properties table, so we
+                    # always capture time_start from the ISO datetime string.
+                    start = item.get("startDate") or ""
                     if "date" not in result:
-                        start = item.get("startDate") or ""
                         iso_m = re.match(r"(\d{4}-\d{2}-\d{2})", start)
                         if iso_m:
                             result["date"] = iso_m.group(1)
-                        if "time_start" not in result:
-                            t_m = re.search(r"T(\d{2}):(\d{2})", start)
-                            if t_m:
-                                result["time_start"] = f"{t_m.group(1)}:{t_m.group(2)}"
+                    if "time_start" not in result and start:
+                        t_m = re.search(r"T(\d{2}):(\d{2})", start)
+                        if t_m:
+                            result["time_start"] = f"{t_m.group(1)}:{t_m.group(2)}"
                     # Venue
                     if "venue_name" not in result:
                         loc = item.get("location") or {}
@@ -522,7 +542,27 @@ class TicketPlusScraper(BaseScraper):
                         result["price_range"] = pr
                         break
 
-        # ── 4. Description: Spree product-description div then meta ──────────
+        # ── 4. Name: og:title or H1 (cleaned of Spree date/time suffix) ─────
+        for tag in ("h1", "h2"):
+            el = soup.find(tag, class_=re.compile(r"product[_-](?:name|title)|event[_-](?:name|title)|page[_-]title", re.I))
+            if not el:
+                el = soup.find(tag)
+            if el:
+                raw_name = el.get_text(strip=True)
+                if raw_name and len(raw_name) > 2:
+                    result["name"] = _clean_title(raw_name)
+                    break
+        if "name" not in result:
+            og_title = soup.find("meta", {"property": "og:title"})
+            if og_title and og_title.get("content"):
+                raw_name = og_title["content"].split("|")[0].strip()
+                if raw_name:
+                    result["name"] = _clean_title(raw_name)
+
+        # ── 5. Description: Spree product-description div only ────────────────
+        # Do NOT fall back to meta description — on Spree event pages the meta
+        # description is auto-generated from product properties and typically
+        # contains the venue address, not actual event copy.
         if "description" not in result:
             for cls_pat in (
                 re.compile(r"product[_-]description|event[_-]description", re.I),
@@ -537,12 +577,7 @@ class TicketPlusScraper(BaseScraper):
                         result["description"] = txt[:1500]
                         break
 
-        if "description" not in result:
-            meta = soup.find("meta", {"name": "description"})
-            if meta and meta.get("content"):
-                result["description"] = meta["content"][:1500]
-
-        # ── 5. Image fallback: og:image ───────────────────────────────────────
+        # ── 6. Image fallback: og:image ───────────────────────────────────────
         if "image_url" not in result:
             og = soup.find("meta", {"property": "og:image"})
             if og and og.get("content", "").startswith("http"):
@@ -650,10 +685,12 @@ class TicketPlusScraper(BaseScraper):
                 }
                 ev.update(detail)
 
-                # Name fallback: extract from URL slug
-                if not ev.get("name"):
+                # Name: prefer detail page extraction; fall back to URL slug
+                if ev.get("name"):
+                    ev["name"] = _clean_title(ev["name"])
+                else:
                     slug_name = detail_url.rstrip("/").split("/")[-1].replace("-", " ").title()
-                    ev["name"] = slug_name
+                    ev["name"] = _clean_title(slug_name)
 
                 if venue_name_override:
                     ev["venue_name"] = venue_name_override

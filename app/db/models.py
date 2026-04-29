@@ -72,12 +72,13 @@ class Venue(Base):
     website_url = Column(String(500), nullable=True)
     menu_pdf_url = Column(String(500), nullable=True)
     neighborhood_id = Column(Integer, ForeignKey("neighborhoods.id"), nullable=True, index=True)
+    address = Column(String(500), nullable=True)  # Street address
     source_url = Column(String(500), nullable=True)
     is_verified = Column(Boolean, default=False, nullable=False, server_default="false")
     scraped_at = Column(DateTime(timezone=True), nullable=True)
     accessibility_features = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    
+
     # Relationships
     neighborhood = relationship("Neighborhood", back_populates="venues")
     events = relationship("Event", back_populates="venue", cascade="all, delete-orphan")
