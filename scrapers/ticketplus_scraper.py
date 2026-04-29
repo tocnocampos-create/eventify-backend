@@ -136,14 +136,14 @@ _PROP_ADDR  = {"dirección", "direccion", "address", "domicilio", "ubicación", 
 
 # ── HTML helpers ──────────────────────────────────────────────────────────────
 
-# Matches trailing ISO datetime noise appended to Spree slugs/page-titles:
-#   "La Elegida 2026 04 29 20 30 00 0400"
-#   "Concierto 2026-04-29T20:30:00-04:00"
-#   "Show 2026 04 29"
+# Matches trailing datetime noise appended to Spree slugs/titles:
+#   "La Elegida 2026 04 29 20 30 00 0400"   ← slug-derived (spaces, unsigned tz)
+#   "Concierto 2026-04-29T20:30:00-04:00"   ← ISO with sign
+#   "Show 2026 04 29"                        ← date only
 _TRAILING_DATETIME_RE = re.compile(
-    r"\s+\d{4}[\s\-]\d{1,2}[\s\-]\d{1,2}"   # YYYY-MM-DD or YYYY MM DD
-    r"(?:[\sT:]\d{1,2}){0,6}"                # optional HH MM SS
-    r"(?:\s*[+\-]\d{4})?"                    # optional timezone offset ±HHMM
+    r"\s+\d{4}[\s\-]\d{1,2}[\s\-]\d{1,2}"  # YYYY MM DD (spaces or hyphens)
+    r"(?:[\s:T]\d{2}){0,4}"                 # up to 4 × exact 2-digit time parts
+    r"(?:\s*[+\-]?\d{4})?"                  # optional ±HHMM or bare HHMM tz
     r"\s*$",
     re.I,
 )
@@ -421,6 +421,16 @@ class TicketPlusScraper(BaseScraper):
 
         result: dict[str, Any] = {}
 
+        # ── 0. div.description-content — primary description source ───────────
+        # TicketPlus renders the real event copy inside div.description-content.
+        # We check this FIRST so it wins over the JSON-LD "description" field,
+        # which is always auto-generated as "EventName, Venue, City, Date".
+        desc_div = soup.find("div", class_="description-content")
+        if desc_div:
+            txt = desc_div.get_text(" ", strip=True)
+            if len(txt) > 30:
+                result["description"] = txt[:1500]
+
         # ── 1. Spree product properties table ─────────────────────────────────
         props = _read_spree_properties(soup)
 
@@ -475,6 +485,13 @@ class TicketPlusScraper(BaseScraper):
                         continue
 
                     # ── Event JSON-LD ──────────────────────────────────────────
+                    # Name — use LD name as fallback (may have encoding issues);
+                    # H1/og:title extraction below gives better results.
+                    if "name" not in result:
+                        ld_name = (item.get("name") or "").strip()
+                        if ld_name:
+                            result["name"] = _clean_title(ld_name)
+
                     # Date + time — extract startDate regardless of whether date
                     # was already set from the Spree properties table, so we
                     # always capture time_start from the ISO datetime string.
@@ -487,6 +504,7 @@ class TicketPlusScraper(BaseScraper):
                         t_m = re.search(r"T(\d{2}):(\d{2})", start)
                         if t_m:
                             result["time_start"] = f"{t_m.group(1)}:{t_m.group(2)}"
+
                     # Venue
                     if "venue_name" not in result:
                         loc = item.get("location") or {}
@@ -499,6 +517,7 @@ class TicketPlusScraper(BaseScraper):
                                 street = addr.get("streetAddress", "")
                                 locality = addr.get("addressLocality", "")
                                 result["address"] = f"{street} {locality}".strip()
+
                     # Price
                     if "price_range" not in result:
                         offers = item.get("offers") or {}
@@ -511,11 +530,18 @@ class TicketPlusScraper(BaseScraper):
                                 result["price_range"] = [float(low), float(high)]
                             except (TypeError, ValueError):
                                 pass
-                    # Description
+
+                    # Description — TicketPlus auto-generates the JSON-LD
+                    # description as "EventName, Venue, City, DD/MM/YYYY".
+                    # Skip that; use div.description-content (section 0) or
+                    # accept only descriptions that are clearly real event copy
+                    # (i.e., do NOT end with a DD/MM/YYYY date string).
                     if "description" not in result:
-                        desc = item.get("description") or ""
-                        if len(desc.strip()) > 10:
-                            result["description"] = desc.strip()[:1500]
+                        desc = (item.get("description") or "").strip()
+                        if desc and not re.search(r"\d{2}/\d{2}/\d{4}\s*$", desc):
+                            if len(desc) > 30:
+                                result["description"] = desc[:1500]
+
                     # Image
                     if "image_url" not in result:
                         img_ld = item.get("image")
@@ -542,22 +568,33 @@ class TicketPlusScraper(BaseScraper):
                         result["price_range"] = pr
                         break
 
-        # ── 4. Name: og:title or H1 (cleaned of Spree date/time suffix) ─────
-        for tag in ("h1", "h2"):
-            el = soup.find(tag, class_=re.compile(r"product[_-](?:name|title)|event[_-](?:name|title)|page[_-]title", re.I))
-            if not el:
-                el = soup.find(tag)
-            if el:
-                raw_name = el.get_text(strip=True)
-                if raw_name and len(raw_name) > 2:
-                    result["name"] = _clean_title(raw_name)
+        # ── 4. Name: H1 or og:title (cleaned of TP prefix + date/time suffix) ─
+        # TicketPlus H1: "Tus entradas para <EventName>"
+        # TicketPlus og:title: "Entradas para <EventName> - Ticketplus"
+        # Strip known prefixes/suffixes to get the bare event name.
+        _TP_NAME_PREFIXES = ("Tus entradas para ", "Entradas para ", "Entradas ")
+        _TP_NAME_SUFFIX   = " - Ticketplus"
+
+        def _extract_tp_name(raw: str) -> str:
+            for pfx in _TP_NAME_PREFIXES:
+                if raw.lower().startswith(pfx.lower()):
+                    raw = raw[len(pfx):]
                     break
-        if "name" not in result:
+            if raw.lower().endswith(_TP_NAME_SUFFIX.lower()):
+                raw = raw[: -len(_TP_NAME_SUFFIX)]
+            return _clean_title(raw.strip())
+
+        h1 = soup.find("h1")
+        if h1:
+            raw_name = h1.get_text(strip=True)
+            if raw_name and len(raw_name) > 2:
+                # Override weaker LD name with the properly accented H1 name
+                result["name"] = _extract_tp_name(raw_name)
+
+        if not result.get("name"):
             og_title = soup.find("meta", {"property": "og:title"})
             if og_title and og_title.get("content"):
-                raw_name = og_title["content"].split("|")[0].strip()
-                if raw_name:
-                    result["name"] = _clean_title(raw_name)
+                result["name"] = _extract_tp_name(og_title["content"])
 
         # ── 5. Description: Spree product-description div only ────────────────
         # Do NOT fall back to meta description — on Spree event pages the meta
@@ -577,7 +614,18 @@ class TicketPlusScraper(BaseScraper):
                         result["description"] = txt[:1500]
                         break
 
-        # ── 6. Image fallback: og:image ───────────────────────────────────────
+        # ── 6. Time fallback: parse HH:MM from URL slug ───────────────────────
+        # TP slugs end with -YYYY-MM-DD-HH-MM-SS-TZ
+        # e.g. la-elegida-2026-04-29-20-30-00-0400 → time_start "20:30"
+        if "time_start" not in result:
+            slug = url.rstrip("/").split("/")[-1]
+            t_m = re.search(
+                r"-(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-\d{2}-?\d{4}$", slug
+            )
+            if t_m:
+                result["time_start"] = f"{t_m.group(4)}:{t_m.group(5)}"
+
+        # ── 7. Image fallback: og:image ───────────────────────────────────────
         if "image_url" not in result:
             og = soup.find("meta", {"property": "og:image"})
             if og and og.get("content", "").startswith("http"):
