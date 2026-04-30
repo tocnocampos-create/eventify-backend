@@ -124,7 +124,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get
 
     try:
         resend.Emails.send({
-            "from": "Eventify <onboarding@resend.dev>",
+            "from": "Eventify <noreply@eventifyapp.cl>",
             "to": [body.email],
             "subject": "Código de recuperación de contraseña",
             "html": f"""
