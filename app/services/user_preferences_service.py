@@ -12,6 +12,7 @@ from app.db.models import (
     UserInterest,
     UserSavedEvent,
     UserVenueFollow,
+    UserVenueVisit,
     Venue,
 )
 
@@ -236,6 +237,45 @@ class UserPreferencesService:
             "saved_events": saved_events,
             "recommended_events": recommended_events,
         }
+
+    # ── Venue visits (outdoor agenda) ──────────────────────────────
+
+    @staticmethod
+    def save_venue_visit(db: Session, user_id: int, data: dict) -> "UserVenueVisit":
+        visit = UserVenueVisit(
+            user_id=user_id,
+            venue_name=data["venue_name"],
+            venue_type=data.get("venue_type"),
+            venue_city=data.get("venue_city"),
+            scheduled_date=data["scheduled_date"],
+            scheduled_time=data.get("scheduled_time"),
+        )
+        db.add(visit)
+        db.commit()
+        db.refresh(visit)
+        return visit
+
+    @staticmethod
+    def get_venue_visits(db: Session, user_id: int) -> list:
+        return (
+            db.query(UserVenueVisit)
+            .filter_by(user_id=user_id)
+            .order_by(UserVenueVisit.scheduled_date, UserVenueVisit.scheduled_time)
+            .all()
+        )
+
+    @staticmethod
+    def delete_venue_visit(db: Session, user_id: int, visit_id: int) -> bool:
+        row = (
+            db.query(UserVenueVisit)
+            .filter_by(id=visit_id, user_id=user_id)
+            .first()
+        )
+        if not row:
+            return False
+        db.delete(row)
+        db.commit()
+        return True
 
     # ── My reviews ─────────────────────────────────────────────────
 

@@ -19,6 +19,8 @@ from app.models.schemas import (
     UserSettings,
     UserSettingsUpdate,
     Venue as VenueSchema,
+    VenueVisitCreate,
+    VenueVisitResponse,
 )
 from app.services.user_preferences_service import UserPreferencesService
 
@@ -163,6 +165,37 @@ async def update_settings(
     db.commit()
     db.refresh(current_user)
     return UserSettings(notifications_enabled=current_user.notifications_enabled)
+
+
+# ── Venue visits (outdoor agenda) ──────────────────────────────
+
+@router.post("/venue-visits", response_model=VenueVisitResponse, status_code=201)
+async def create_venue_visit(
+    body: VenueVisitCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return UserPreferencesService.save_venue_visit(db, current_user.id, body.model_dump())
+
+
+@router.get("/venue-visits", response_model=List[VenueVisitResponse])
+async def get_venue_visits(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return UserPreferencesService.get_venue_visits(db, current_user.id)
+
+
+@router.delete("/venue-visits/{visit_id}", status_code=204)
+async def delete_venue_visit(
+    visit_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    success = UserPreferencesService.delete_venue_visit(db, current_user.id, visit_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Venue visit not found")
+    return None
 
 
 # ── My reviews ─────────────────────────────────────────────────

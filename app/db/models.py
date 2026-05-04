@@ -31,6 +31,7 @@ class User(Base):
     followed_venues = relationship("UserVenueFollow", back_populates="user", cascade="all, delete-orphan")
     saved_events = relationship("UserSavedEvent", back_populates="user", cascade="all, delete-orphan")
     interests = relationship("UserInterest", back_populates="user", cascade="all, delete-orphan")
+    venue_visits = relationship("UserVenueVisit", back_populates="user", cascade="all, delete-orphan")
 
 
 class Neighborhood(Base):
@@ -235,4 +236,21 @@ class UserInterest(Base):
 
     # Relationships
     user = relationship("User", back_populates="interests")
+
+
+class UserVenueVisit(Base):
+    """Personal agenda entry for an outdoor venue visit."""
+    __tablename__ = "user_venue_visits"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    venue_name = Column(String(255), nullable=False)
+    venue_type = Column(String(100), nullable=True)
+    venue_city = Column(String(100), nullable=True)
+    scheduled_date = Column(String(50), nullable=False)  # YYYY-MM-DD
+    scheduled_time = Column(String(10), nullable=True)   # HH:mm
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="venue_visits")
 

@@ -412,6 +412,29 @@ class SavedEventResponse(BaseModel):
     saved: bool
 
 
+class VenueVisitCreate(BaseModel):
+    """Create a personal outdoor venue visit on the agenda."""
+    venue_name: str = Field(..., max_length=255)
+    venue_type: Optional[str] = Field(None, max_length=100)
+    venue_city: Optional[str] = Field(None, max_length=100)
+    scheduled_date: str = Field(..., max_length=50)   # YYYY-MM-DD
+    scheduled_time: Optional[str] = Field(None, max_length=10)  # HH:mm
+
+
+class VenueVisitResponse(BaseModel):
+    """Outdoor venue visit agenda entry."""
+    id: int
+    venue_name: str
+    venue_type: Optional[str] = None
+    venue_city: Optional[str] = None
+    scheduled_date: str
+    scheduled_time: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class NotificationFeed(BaseModel):
     """Aggregated notification feed."""
     followed_venue_events: Dict[str, List[Event]]
