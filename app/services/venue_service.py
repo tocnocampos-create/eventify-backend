@@ -94,8 +94,8 @@ class VenueService:
 
         today = date.today().isoformat()
         events = db.query(Event).filter(Event.venue_id == venue_id).all()
-        upcoming = [e for e in events if e.date >= today]
-        past = [e for e in events if e.date < today]
+        upcoming = sorted([e for e in events if e.date >= today], key=lambda e: e.date)
+        past = sorted([e for e in events if e.date < today], key=lambda e: e.date, reverse=True)
 
         reviews = (
             db.query(Review)
