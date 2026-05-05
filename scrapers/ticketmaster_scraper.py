@@ -23,6 +23,7 @@ Run:
 """
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 import os
@@ -128,6 +129,22 @@ def _parse_date_safe(raw: str) -> str | None:
     # Prose date range — take first part only
     first_part = raw.split(" - ")[0].split(" al ")[0].strip()
     return _parse_date_es(first_part)
+
+
+def _parse_month_only(raw: str) -> str | None:
+    """Parse a month+year string like 'Mayo 2026' → last day of that month.
+
+    Using the last day means month-only events stay visible through month-end
+    and don't fall into the past on day 1 of the listed month.
+    """
+    m = re.match(r"^([a-záéíóúüñ]+)\s+(\d{4})$", raw.strip().lower())
+    if m:
+        month_num = _MONTHS_ES.get(m.group(1)[:3])
+        if month_num:
+            year = int(m.group(2))
+            last_day = calendar.monthrange(year, month_num)[1]
+            return f"{year}-{month_num:02d}-{last_day:02d}"
+    return None
 
 
 # ── Main scraper class ────────────────────────────────────────────────────────
@@ -266,6 +283,9 @@ class TicketmasterScraper(BaseScraper):
             return None
         href = link.get("href", "")
         if not href or href in ("#", "javascript:void(0)"):
+            return None
+        # Skip venue/organizer pages — they are not event detail pages
+        if re.search(r"/page/", href, re.IGNORECASE):
             return None
         full_url = _absolute_url(href)
         # If still relative (no scheme), can't use — skip
@@ -441,6 +461,17 @@ class TicketmasterScraper(BaseScraper):
                     t = _parse_time_str(re.sub(r"^\d{4}-\d{2}-\d{2}", "", start))
                     if t:
                         result["time_start"] = t
+
+                    # Ticketmaster CL often omits startDate — the date is placed
+                    # in the description field as Spanish prose:
+                    #   "19 de Agosto 2026"  → exact date
+                    #   "Mayo 2026"          → month-only → use last day of month
+                    if "date" not in result:
+                        desc_raw = (item.get("description") or "").strip()
+                        if desc_raw:
+                            d = _parse_date_safe(desc_raw) or _parse_month_only(desc_raw)
+                            if d:
+                                result["date"] = d
 
                     # End time
                     end = item.get("endDate") or ""

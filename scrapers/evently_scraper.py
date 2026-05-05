@@ -95,6 +95,8 @@ def _is_evently_event_url(href: str) -> bool:
       https://organizer.evently.cl/event-slug
       https://organizer.evently.cl/event-slug/
       //organizer.evently.cl/event-slug
+
+    Excluded non-event subdomains: www, app, admin, api, cdn, static.
     """
     if not href:
         return False
@@ -102,10 +104,10 @@ def _is_evently_event_url(href: str) -> bool:
         parsed = urlparse(href if href.startswith("http") else "https:" + href)
         host = parsed.netloc.lower()
         path = parsed.path.strip("/")
-        # Must be a subdomain of evently.cl (not www.) with a non-empty path
+        _EXCLUDED = ("www.", "app.", "admin.", "api.", "cdn.", "static.", "assets.")
         return (
             host.endswith("." + BASE_DOMAIN)
-            and not host.startswith("www.")
+            and not any(host.startswith(s) for s in _EXCLUDED)
             and bool(path)
         )
     except Exception:
@@ -416,8 +418,19 @@ def _event_from_next_dict(raw: dict, listing_url: str) -> dict[str, Any] | None:
 # ── HTML card parsing (fallback) ──────────────────────────────────────────────
 
 def _find_cards(soup: BeautifulSoup) -> list[Any]:
-    """Find event card elements on a listing page (HTML fallback)."""
+    """Find event card elements on a listing page (HTML fallback).
 
+    Evently migrated to Next.js App Router — __NEXT_DATA__ is no longer
+    injected on listing or detail pages.  The current layout renders event
+    cards as bare <a> tags pointing to organizer subdomains; there are no
+    semantic card class names.
+
+    Strategy (highest-confidence first):
+      1. Named card CSS classes — kept for forward-compatibility.
+      2. Collect every <a> that points to an organiser subdomain and return
+         it directly.  The parent div is tried first (contains the <img>),
+         but we cap at 1 level to avoid climbing to a shared page container.
+    """
     # 1. Named card components
     for cls_pat in (
         re.compile(r"event[_-]?card|EventCard|eventCard", re.I),
@@ -429,9 +442,9 @@ def _find_cards(soup: BeautifulSoup) -> list[Any]:
         if cards:
             return cards
 
-    # 2. Any block element containing an Evently subdomain link
-    cards: list[Any] = []
+    # 2. Event <a> tags — use parent div only if it is a narrow single-child wrapper.
     seen: set[str] = set()
+    cards: list[Any] = []
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if not _is_evently_event_url(href):
@@ -439,20 +452,28 @@ def _find_cards(soup: BeautifulSoup) -> list[Any]:
         if href in seen:
             continue
         seen.add(href)
-        parent = a
-        for _ in range(6):
-            p = parent.parent
-            if p and p.name in ("div", "article", "li", "section"):
-                parent = p
-            else:
-                break
-        cards.append(parent)
+        # Try 1-level parent as the card container; fall back to <a> itself.
+        parent = a.parent
+        if (
+            parent
+            and parent.name in ("div", "article", "li")
+            and len(parent.find_all("a", href=_is_evently_event_url)) == 1
+        ):
+            cards.append(parent)
+        else:
+            cards.append(a)
 
     return cards
 
 
 def _parse_card(card: Any) -> dict[str, Any] | None:
-    """Extract a stub event dict from an HTML listing card."""
+    """Extract a stub event dict from an HTML listing card.
+
+    With the current Evently App Router layout the listing cards are bare
+    <a> tags containing only an image — no heading text.  The name is
+    derived from the URL slug as a placeholder; the detail-page OG title
+    will override it during the detail fetch.
+    """
     ev: dict[str, Any] = {}
 
     # URL
@@ -467,7 +488,7 @@ def _parse_card(card: Any) -> dict[str, Any] | None:
     ev["url"] = href
     ev["source_url"] = _build_source_url(href)
 
-    # Title
+    # Title — heading elements (present in older layouts)
     for tag in ("h1", "h2", "h3", "h4"):
         el = card.find(tag)
         if el:
@@ -485,6 +506,17 @@ def _parse_card(card: Any) -> dict[str, Any] | None:
                 if text:
                     ev["name"] = text
                     break
+
+    # Title fallback — derive from URL slug (detail OG title will override)
+    if not ev.get("name"):
+        from urllib.parse import urlparse as _urlparse
+        slug = _urlparse(href).path.strip("/").split("/")[0]
+        # Strip trailing DD-MM-YYYY date component
+        slug = re.sub(r"-\d{2}-\d{2}-\d{4}$", "", slug)
+        name = slug.replace("-", " ").replace("_", " ").strip()
+        if name:
+            ev["name"] = name
+
     if not ev.get("name"):
         return None
 
@@ -493,12 +525,19 @@ def _parse_card(card: Any) -> dict[str, Any] | None:
     if img:
         src = img.get("data-src") or img.get("src") or img.get("data-lazy-src")
         if src:
+            # Decode Next.js image optimisation wrapper /_next/image?url=...
+            if src and "/_next/image" in src:
+                from urllib.parse import parse_qs, unquote as _unquote, urlparse as _up
+                qs = parse_qs(_up(src).query)
+                decoded = qs.get("url", [None])[0]
+                if decoded:
+                    src = _unquote(decoded)
             if src.startswith("//"):
                 src = "https:" + src
             if src.startswith("http"):
                 ev["image_url"] = src
 
-    # Date (listing cards may show truncated date)
+    # Date (listing cards may show a <time> element)
     time_el = card.find("time")
     if time_el:
         raw = time_el.get("datetime") or time_el.get_text(strip=True)
@@ -963,8 +1002,8 @@ class EventlyScraper(BaseScraper):
                     if needs_detail:
                         detail = self.fetch_event_detail(detail_url)
                         for key, val in detail.items():
-                            # Allow detail page to override generic listing-card names
-                            if key == "name" and val and len(val) > len(ev.get("name") or ""):
+                            # Detail OG title always wins over slug-derived placeholder names
+                            if key in ("name", "venue_name") and val:
                                 ev[key] = val
                             else:
                                 ev.setdefault(key, val)
