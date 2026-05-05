@@ -84,6 +84,12 @@ SANTIAGO_TOKENS = {
     "espacio riesco", "club chocolate", "blondie",
     # Additional venue tokens
     "egana", "usach", "florinda", "lacasaenelaire", "scdegana", "aulamagna",
+    # Evently / PortalDisc partner venues confirmed in Santiago/RM
+    "cafe rock", "caferock", "multiespacio", "la puerta amarilla", "bar la puerta",
+    "meson nerudiano", "bandera 1001", "la bodeguita", "espacio riesco",
+    # PortalDisc cartelera slugs (concatenated — no spaces in URL)
+    "lapuertaamarilla", "mesonnerudiano", "bandera1001", "teatromunicipaldelaflorida",
+    "salamaster", "salarbx",
 }
 
 # ── Spanish month lookup ──────────────────────────────────────────────────────

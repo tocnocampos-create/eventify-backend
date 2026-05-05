@@ -51,6 +51,7 @@ from bs4 import BeautifulSoup
 from scrapers.base_scraper import BaseScraper
 from scrapers.puntoticket_scraper import (
     SANTIAGO_TOKENS,
+    _MONTHS_ES,
     _is_santiago,
     _parse_date_es,
     _parse_price,
@@ -131,6 +132,54 @@ def _organizer_and_slug(url: str) -> tuple[str, str]:
         return organizer, slug
     except Exception:
         return "", ""
+
+
+def _date_from_url_slug(url: str) -> str | None:
+    """Extract a date from an Evently event URL slug.
+
+    Evently appends dates to slugs in two formats:
+      DD-MM-YYYY at the end:  .../Event-Name-06-05-2026  → 2026-05-06
+      Day-N-Month-Name:       .../Miercoles-6-De-Mayo-…  → 2026-05-06
+
+    Tries ISO-format end pattern first (most reliable), then Spanish month.
+    """
+    try:
+        slug = urlparse(url).path.strip("/").split("/")[-1]
+    except Exception:
+        return None
+    if not slug:
+        return None
+
+    # Pattern 1: ends with DD-MM-YYYY
+    m = re.search(r"[-_](\d{2})-(\d{2})-(\d{4})$", slug, re.I)
+    if m:
+        day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return f"{year:04d}-{month:02d}-{day:02d}"
+
+    # Pattern 2: N-MonthName anywhere in slug (e.g. "6-De-Mayo" or "6-mayo")
+    slug_lower = slug.lower().replace("-de-", "-")
+    m = re.search(
+        r"(\d{1,2})[-_](enero|febrero|marzo|abril|mayo|junio|julio|agosto"
+        r"|septiembre|octubre|noviembre|diciembre)",
+        slug_lower,
+    )
+    if m:
+        day  = int(m.group(1))
+        mon  = _MONTHS_ES.get(m.group(2))
+        if mon and 1 <= day <= 31:
+            from datetime import date as _date
+            year = _date.today().year
+            # If the resulting date is in the past, bump to next year
+            try:
+                d = _date(year, mon, day)
+                if d < _date.today():
+                    d = _date(year + 1, mon, day)
+                return d.isoformat()
+            except ValueError:
+                pass
+
+    return None
 
 
 def _build_source_url(url: str) -> str:
@@ -748,6 +797,18 @@ class EventlyScraper(BaseScraper):
                         result["description"] = txt[:1500]
                     break
 
+        # Extract event name and venue from og:title
+        # Format: "Event Name - Venue Name | Evently"
+        og_title = soup.find("meta", {"property": "og:title"})
+        if og_title:
+            raw_title = og_title.get("content", "").strip()
+            raw_title = raw_title.split(" | ")[0]  # drop " | Evently"
+            parts = [p.strip() for p in raw_title.split(" - ") if p.strip()]
+            if len(parts) >= 2 and "name" not in result:
+                result["name"] = parts[0]
+            if len(parts) >= 2 and "venue_name" not in result:
+                result["venue_name"] = parts[-1]
+
         # ── 4. DOM fallback for date / venue / price ──────────────────────────
         if "date" not in result:
             time_el = soup.find("time")
@@ -902,7 +963,20 @@ class EventlyScraper(BaseScraper):
                     if needs_detail:
                         detail = self.fetch_event_detail(detail_url)
                         for key, val in detail.items():
-                            ev.setdefault(key, val)
+                            # Allow detail page to override generic listing-card names
+                            if key == "name" and val and len(val) > len(ev.get("name") or ""):
+                                ev[key] = val
+                            else:
+                                ev.setdefault(key, val)
+
+                    # Last resort: extract date from URL slug (DD-MM-YYYY suffix)
+                    if not ev.get("date"):
+                        slug_date = _date_from_url_slug(detail_url)
+                        if slug_date:
+                            ev["date"] = slug_date
+                            logger.debug(
+                                "[evently] Date from slug for %r: %s", ev.get("name"), slug_date
+                            )
 
                     # Must have a date
                     if not ev.get("date"):

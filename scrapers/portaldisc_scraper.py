@@ -335,6 +335,12 @@ class PortalDiscScraper(BaseScraper):
                 )
                 return data_rows
 
+        # 1b. Current PortalDisc layout: div.album cards
+        albums = soup.find_all("div", class_="album")
+        if albums:
+            logger.debug("[portaldisc] lista_cards: %d .album elements", len(albums))
+            return albums
+
         # 2. Named card divs / articles
         for cls_pat in (
             re.compile(r"event[_-]?(?:card|item|row|listing)", re.I),
@@ -628,7 +634,14 @@ class PortalDiscScraper(BaseScraper):
 
             venue_name = a.get_text(strip=True) or slug.replace("-", " ").title()
 
-            # All ~22 portaltickets partner venues are Santiago/RM — accept all.
+            # Filter to Santiago/RM venues only
+            venue_hint = f"{venue_name} {slug}"
+            if not _is_santiago(venue_hint):
+                logger.debug(
+                    "[portaldisc/cartelera] Skipping non-Santiago venue: %r", venue_name
+                )
+                continue
+
             seen_slugs.add(slug)
             results.append((slug, venue_name))
             logger.debug(
@@ -644,9 +657,20 @@ class PortalDiscScraper(BaseScraper):
         """Return event card elements from a /cartelera/{slug} page.
 
         The cartelera page shows upcoming events for one venue.
-        Structure is typically simpler than lista_eventos — often a list of
-        upcoming show dates with links to event detail pages.
+        Current PortalDisc structure:
+          <div class="album" style="display:flex;">
+            <div class="cover img-container"><a href="/evento/..."><img .../></a></div>
+            <div class="info_responsivo">
+              <a href="/evento/..."><p><i>…</i> TITLE</p><p>Date string</p></a>
+            </div>
+          </div>
         """
+        # 0. Current layout: div.album cards (highest priority)
+        albums = soup.find_all("div", class_="album")
+        if albums:
+            logger.debug("[portaldisc] cartelera_cards: %d .album elements", len(albums))
+            return albums
+
         # 1. Table rows with event links
         for tbl in soup.find_all("table"):
             rows = [r for r in tbl.find_all("tr") if r.find("a", href=_is_event_href)]
@@ -668,7 +692,7 @@ class PortalDiscScraper(BaseScraper):
             if items:
                 return items
 
-        # 4. Last resort: block ancestors of event links
+        # 4. Last resort: immediate block ancestors of event links (depth 1 only)
         cards: list[Any] = []
         seen: set[str] = set()
         for a in soup.find_all("a", href=True):
@@ -676,14 +700,11 @@ class PortalDiscScraper(BaseScraper):
             if not _is_event_href(href) or href in seen:
                 continue
             seen.add(href)
-            parent = a
-            for _ in range(5):
-                p = parent.parent
-                if p and p.name in ("div", "article", "li", "tr", "section"):
-                    parent = p
-                else:
-                    break
-            cards.append(parent)
+            parent = a.parent
+            if parent and parent.name in ("div", "article", "li", "tr", "section"):
+                cards.append(parent)
+            else:
+                cards.append(a)
         return cards
 
     def _parse_cartelera_card(
@@ -691,44 +712,65 @@ class PortalDiscScraper(BaseScraper):
     ) -> dict[str, Any] | None:
         """Extract a stub event dict from a cartelera event card.
 
-        The venue_name is injected directly (already known for this page).
+        Handles current PortalDisc .album layout:
+          <div class="album">
+            <div class="cover img-container"><a href="/evento/..."><img/></a></div>
+            <div class="info_responsivo">
+              <a href="/evento/...">
+                <p><i class="fa fa-ticket"></i> EVENT TITLE</p>
+                <p style="font-weight: normal">Jueves 14 de mayo 2026, 19:00</p>
+              </a>
+            </div>
+          </div>
         """
         ev: dict[str, Any] = {}
 
-        link = card.find("a", href=_is_event_href)
+        # ── URL ───────────────────────────────────────────────────────────────
+        # Prefer the link inside .info_responsivo (has title/date text).
+        # Fall back to any /evento/ link in the card.
+        info_div = card.find(class_="info_responsivo")
+        link = None
+        if info_div:
+            link = info_div.find("a", href=_is_event_href)
+        if not link:
+            link = card.find("a", href=_is_event_href)
         if not link:
             return None
+
         href = _abs(link["href"])
         ev["url"]        = href
         ev["source_url"] = _source_url_from_event_url(href)
         ev["venue_name"] = venue_name
 
-        # Title
-        ev["name"] = link.get_text(strip=True)
-        if not ev["name"]:
+        # ── Title ─────────────────────────────────────────────────────────────
+        # In .info_responsivo the first <p> contains icon + title text.
+        # Stripping <i> children gives the clean title.
+        paragraphs = link.find_all("p")
+        if paragraphs:
+            first_p = paragraphs[0]
+            # Remove icon elements (<i>) before extracting text
+            for icon in first_p.find_all("i"):
+                icon.decompose()
+            title_text = first_p.get_text(strip=True)
+            if title_text:
+                ev["name"] = title_text
+
+        if not ev.get("name"):
+            ev["name"] = link.get_text(strip=True)
+
+        if not ev.get("name"):
             for tag in ("h2", "h3", "h4", "strong", "b"):
                 el = card.find(tag)
                 if el and el.get_text(strip=True):
                     ev["name"] = el.get_text(strip=True)
                     break
-        if not ev["name"]:
+        if not ev.get("name"):
             return None
 
-        # Date
-        date_el = (
-            card.find("time")
-            or card.find(class_=re.compile(r"\bfecha\b|\bdate\b|\bdia\b", re.I))
-        )
-        if not date_el:
-            for td in card.find_all("td"):
-                txt = td.get_text(strip=True)
-                if re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", txt) or re.search(
-                    r"\d{1,2}\s+de\s+[a-z]+", txt, re.I
-                ):
-                    date_el = td
-                    break
-        if date_el:
-            raw = date_el.get("datetime") or date_el.get_text(strip=True)
+        # ── Date + time ───────────────────────────────────────────────────────
+        # Second <p> in .info_responsivo link: "Jueves 14 de mayo 2026, 19:00"
+        if len(paragraphs) >= 2:
+            raw = paragraphs[1].get_text(strip=True)
             d = _parse_date_safe(raw)
             if d:
                 ev["date"] = d
@@ -736,12 +778,34 @@ class PortalDiscScraper(BaseScraper):
                 if t:
                     ev["time_start"] = t
 
-        # Image
+        if not ev.get("date"):
+            date_el = (
+                card.find("time")
+                or card.find(class_=re.compile(r"\bfecha\b|\bdate\b|\bdia\b", re.I))
+            )
+            if not date_el:
+                for td in card.find_all("td"):
+                    txt = td.get_text(strip=True)
+                    if re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", txt) or re.search(
+                        r"\d{1,2}\s+de\s+[a-z]+", txt, re.I
+                    ):
+                        date_el = td
+                        break
+            if date_el:
+                raw = date_el.get("datetime") or date_el.get_text(strip=True)
+                d = _parse_date_safe(raw)
+                if d:
+                    ev["date"] = d
+                    t = _parse_time_safe(raw)
+                    if t:
+                        ev["time_start"] = t
+
+        # ── Image ─────────────────────────────────────────────────────────────
         img_url = _extract_image(card)
         if img_url:
             ev["image_url"] = img_url
 
-        # Price
+        # ── Price ─────────────────────────────────────────────────────────────
         pr = _extract_price(card)
         if pr is not None:
             ev["price_range"] = pr

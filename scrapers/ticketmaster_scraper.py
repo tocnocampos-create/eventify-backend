@@ -57,6 +57,7 @@ BASE_URL = "https://www.ticketmaster.cl"
 # The scraper will follow pagination from each seed URL.
 LISTING_SEEDS: list[str] = [
     f"{BASE_URL}/",
+    f"{BASE_URL}/es/tmus/home",
     f"{BASE_URL}/listing",
 ]
 
@@ -174,8 +175,9 @@ class TicketmasterScraper(BaseScraper):
         3. <li> elements inside an events list container.
         4. Last resort: block ancestors of all event-detail <a> hrefs.
         """
-        # 1. Named card components
+        # 1. Named card components — including current TM Chile layout (.grid_element)
         for cls_pat in (
+            re.compile(r"^grid[_-]element$", re.I),               # ticketmaster.cl current
             re.compile(r"event[_-](?:card|tile|item|listing|row|block)", re.I),
             re.compile(r"tm[_-]event|eventCard|eventTile", re.I),
             re.compile(r"search[_-]result[_-](?:card|item)", re.I),
@@ -279,6 +281,12 @@ class TicketmasterScraper(BaseScraper):
             event["name"] = name_el.get_text(strip=True)
 
         if not event.get("name"):
+            # ticketmaster.cl current layout: <div class="item_title">
+            it = card.find(class_="item_title")
+            if it:
+                event["name"] = it.get_text(strip=True)
+
+        if not event.get("name"):
             for tag in ("h1", "h2", "h3", "h4"):
                 el = card.find(tag)
                 if el:
@@ -332,6 +340,16 @@ class TicketmasterScraper(BaseScraper):
                 event["time_start"] = t
 
         if not event.get("date"):
+            # ticketmaster.cl current layout: <p>Mayo 2026</p> inside .details
+            details_el = card.find(class_="details")
+            if details_el:
+                p = details_el.find("p")
+                if p:
+                    d = _parse_date_safe(p.get_text(strip=True))
+                    if d:
+                        event["date"] = d
+
+        if not event.get("date"):
             for cls_pat in (
                 re.compile(r"event[_-]date|date[_-]event|fecha|when", re.I),
                 re.compile(r"tm[_-]date|cardDate", re.I),
@@ -347,6 +365,16 @@ class TicketmasterScraper(BaseScraper):
         loc_el = card.find(itemprop="location")
         if loc_el:
             event["venue_name"] = loc_el.get_text(strip=True)
+
+        if not event.get("venue_name"):
+            # ticketmaster.cl current layout: <span class="grid-label">Venue name</span>
+            gl = card.find("span", class_="grid-label")
+            if gl:
+                # grid-label sometimes contains nested <span class="hide"> with city
+                # Keep only the top-level text (venue name, not city)
+                text = gl.get_text(strip=True)
+                if text:
+                    event["venue_name"] = text
 
         if not event.get("venue_name"):
             for cls_pat in (
