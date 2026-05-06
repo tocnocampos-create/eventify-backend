@@ -80,6 +80,65 @@ class VenueService:
         return True
     
     @staticmethod
+    def get_venues_by_type(db: Session, venue_types: list) -> list:
+        """Return venues matching the given types, with upcoming event count.
+
+        Excludes:
+          - IDs 461, 238, 403, 260 (misclassified / city-center fallback coords)
+          - Any venue whose first coordinate is ~-33.4372 (city-center fallback)
+        """
+        from datetime import date as date_cls
+
+        today = str(date_cls.today())
+        _EXCLUDED_IDS = (461, 238, 403, 260)
+        _CITY_CENTER_LAT = -33.4372
+
+        upcoming_sub = (
+            db.query(Event.venue_id, sa_func.count(Event.id).label("cnt"))
+            .filter(Event.date >= today)
+            .group_by(Event.venue_id)
+            .subquery()
+        )
+
+        rows = (
+            db.query(Venue, sa_func.coalesce(upcoming_sub.c.cnt, 0).label("upcoming_events"))
+            .outerjoin(upcoming_sub, Venue.id == upcoming_sub.c.venue_id)
+            .filter(
+                Venue.venue_type.in_(venue_types),
+                Venue.id.notin_(_EXCLUDED_IDS),
+            )
+            .order_by(sa_func.coalesce(upcoming_sub.c.cnt, 0).desc(), Venue.name)
+            .all()
+        )
+
+        results = []
+        for venue, upcoming_events in rows:
+            coords = venue.coordinates or []
+            if len(coords) < 2 or coords[0] is None:
+                continue
+            if abs(float(coords[0]) - _CITY_CENTER_LAT) < 0.001:
+                continue
+            results.append({
+                "id": venue.id,
+                "name": venue.name,
+                "venue_type": venue.venue_type,
+                "description": venue.description,
+                "stars": venue.stars,
+                "coordinates": venue.coordinates,
+                "schedule": venue.schedule,
+                "city": venue.city,
+                "address": venue.address,
+                "cover_image_url": venue.cover_image_url,
+                "profile_image_url": venue.profile_image_url,
+                "website_url": venue.website_url,
+                "menu_pdf_url": venue.menu_pdf_url,
+                "neighborhood_id": venue.neighborhood_id,
+                "created_at": venue.created_at,
+                "upcoming_events": upcoming_events,
+            })
+        return results
+
+    @staticmethod
     def get_all_types_of_venues(neighborhood_id: int, db: Session) -> List[str]:
         """Get all types of venues."""
         results = db.query(Venue.venue_type).filter(Venue.neighborhood_id == neighborhood_id).distinct().all()

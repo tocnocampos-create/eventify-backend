@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.db.base import get_db
 from app.db.models import User
-from app.models.schemas import Venue, VenueCreate, VenueUpdate, VenueDetail
+from app.models.schemas import Venue, VenueCreate, VenueUpdate, VenueDetail, VenueWithCount
 from app.services.venue_service import VenueService
 from app.api.dependencies import get_current_user, get_admin_user, get_optional_current_user
 
@@ -24,6 +24,25 @@ async def get_venues(
         db, skip=skip, limit=limit, neighborhood_id=neighborhood_id
     )
     return venues
+
+
+@router.get("/by-type", response_model=List[VenueWithCount], status_code=status.HTTP_200_OK)
+async def get_venues_by_type(
+    venue_types: str = Query(
+        ...,
+        description="Comma-separated venue types, e.g. 'Museo,Centro Cultural,Galería'",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Return venues matching the given types with upcoming event counts.
+
+    Excludes venues with fake/city-center coordinates and known misclassified IDs.
+    Intended for the Arte → Museos map filter.
+    """
+    types = [t.strip() for t in venue_types.split(",") if t.strip()]
+    if not types:
+        return []
+    return VenueService.get_venues_by_type(db, types)
 
 
 @router.get("/{venue_id}/detail", response_model=VenueDetail, status_code=status.HTTP_200_OK)

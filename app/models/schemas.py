@@ -104,6 +104,11 @@ class Venue(VenueBase):
         from_attributes = True
 
 
+class VenueWithCount(Venue):
+    """Venue with precomputed upcoming events count (used by /venues/by-type)."""
+    upcoming_events: int = 0
+
+
 # Event Schemas
 class EventBase(BaseModel):
     """Base event schema."""
