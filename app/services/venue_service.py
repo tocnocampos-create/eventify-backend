@@ -133,6 +133,12 @@ class VenueService:
                 "website_url": venue.website_url,
                 "menu_pdf_url": venue.menu_pdf_url,
                 "neighborhood_id": venue.neighborhood_id,
+                "opening_hours": venue.opening_hours,
+                "hours_json": venue.hours_json,
+                "admission_info": venue.admission_info,
+                "ticket_url": venue.ticket_url,
+                "instagram_url": venue.instagram_url,
+                "permanent_collection": venue.permanent_collection,
                 "created_at": venue.created_at,
                 "upcoming_events": upcoming_events,
             })
