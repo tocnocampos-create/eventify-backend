@@ -28,12 +28,17 @@ from scrapers.base_scraper import BaseScraper, _get_database_url
 from scrapers.cinemark_scraper import CinemarkScraper
 from scrapers.comedypass_scraper import ComedyPassScraper
 from scrapers.evently_scraper import EventlyScraper
+from scrapers.cineplanet_scraper import CineplanetScraper
 from scrapers.cinepolis_scraper import CinepolisScraper
 from scrapers.passline_scraper import PasslineScraper
 from scrapers.portaldisc_scraper import PortalDiscScraper
 from scrapers.puntoticket_scraper import PuntoTicketScraper
 from scrapers.ticketmaster_scraper import TicketmasterScraper
 from scrapers.ticketplus_scraper import TicketPlusScraper
+# MuseoScraper is a two-phase scraper:
+#   Phase A (--enrich): venue enrichment — run once / monthly (hardcoded metadata + light scraping)
+#   Phase B (default):  exposition events — run weekly via the normal scrapers list
+from scrapers.museo_scraper import MuseoScraper
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -130,6 +135,88 @@ def _print_sample(events: list[dict], n: int = 5, verbose: bool = False) -> None
             print(f"    price_range : {price}")
             print(f"    time_start  : {time_s!r}")
             print(f"    description : {(desc[:200] + '…') if len(desc) > 200 else desc!r}")
+
+
+# ── Stale scraper detection ───────────────────────────────────────────────────
+
+# Maps scraper.name → SQL LIKE pattern for source_url in the events table.
+# Used to find the last successful save date for a scraper without needing
+# a dedicated tracking table.
+_SCRAPER_SOURCE_PATTERNS: dict[str, str] = {
+    "cinemark":    "cinemark:cl:%",
+    "cinepolis":   "cinepolis:cl:%",
+    "cineplanet":  "cineplanet:cl:%",
+    "puntoticket": "%puntoticket%",
+    "comedypass":  "%comedypass%",
+    "passline":    "%passline%",
+    "ticketplus":  "%ticketplus%",
+    "ticketmaster": "%ticketmaster%",
+    "evently":     "%evently%",
+    "portaldisc":  "%portaldisc%",
+    "museo":       "museo:%",
+}
+
+
+def _check_stale_scrapers(
+    failed_names: list[str],
+    db,
+    stale_days: int = 2,
+) -> list[str]:
+    """Return scraper names that have been failing for more than stale_days.
+
+    For each failed scraper, queries MAX(scraped_at) from events where
+    source_url matches the known prefix pattern.  If the last successful
+    save is older than stale_days (or no events exist at all), the scraper
+    is considered persistently stale.
+    """
+    from sqlalchemy import text  # noqa: PLC0415
+
+    stale = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=stale_days)
+
+    for name in failed_names:
+        pattern = _SCRAPER_SOURCE_PATTERNS.get(name)
+        if not pattern:
+            # Unknown pattern — cannot determine staleness; skip
+            logger.warning("[stale-check] No source_url pattern for scraper %r", name)
+            continue
+
+        try:
+            row = db.execute(
+                text("SELECT MAX(scraped_at) FROM events WHERE source_url LIKE :pat"),
+                {"pat": pattern},
+            ).fetchone()
+            last_saved = row[0] if row and row[0] else None
+        except Exception as exc:
+            logger.warning("[stale-check] DB query failed for %r: %s", name, exc)
+            continue
+
+        if last_saved is None:
+            # No events at all — treat as stale
+            stale.append(name)
+            logger.error(
+                "[stale-check] Scraper %r has NO events in DB — marking stale", name
+            )
+        else:
+            # last_saved may be timezone-naive (PostgreSQL stores UTC without tz)
+            if last_saved.tzinfo is None:
+                from datetime import timezone as _tz  # noqa: PLC0415
+                last_saved = last_saved.replace(tzinfo=_tz.utc)
+            if last_saved < cutoff:
+                stale.append(name)
+                logger.error(
+                    "[stale-check] Scraper %r last saved %s UTC — stale for >%d days",
+                    name,
+                    last_saved.strftime("%Y-%m-%d %H:%M"),
+                    stale_days,
+                )
+            else:
+                logger.info(
+                    "[stale-check] Scraper %r last saved %s UTC — within threshold",
+                    name, last_saved.strftime("%Y-%m-%d %H:%M"),
+                )
+
+    return stale
 
 
 # ── Post-pipeline steps ───────────────────────────────────────────────────────
@@ -238,34 +325,67 @@ def main() -> None:
         action="store_true",
         help="Print price and description for each sample event",
     )
+    parser.add_argument(
+        "--enrich",
+        action="store_true",
+        help="Run museum Phase A venue enrichment before scraping (monthly)",
+    )
     args = parser.parse_args()
+
+    run_start = datetime.now(timezone.utc)
+    logger.info("━" * 50)
+    logger.info("SCRAPER RUN STARTED%s — %s UTC",
+                " (DRY RUN)" if args.dry_run else "",
+                run_start.strftime("%Y-%m-%d %H:%M:%S"))
+    logger.info("━" * 50)
 
     engine = create_engine(_get_database_url(), pool_pre_ping=True)
     Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+    # ── Museum Phase A: venue enrichment (monthly, --enrich flag) ─────────────
+    if args.enrich:
+        logger.info("━━━ Running museum venue enrichment (Phase A) ━━━")
+        museo = MuseoScraper()
+        museo.run_venue_enrichment()  # uses DATABASE_URL env var, opens own psycopg2 connection
+
     totals = {"found": 0, "created": 0, "updated": 0, "skipped": 0, "failed": 0}
+    scraper_ok: list[str] = []    # names of scrapers that completed without crash
+    scraper_err: list[str] = []   # names of scrapers that raised an unhandled exception
 
     scrapers = [
         PuntoTicketScraper(max_pages=args.max_pages, max_events=args.max_events),
         ComedyPassScraper(max_events=args.max_events),
         CinemarkScraper(max_events=args.max_events),
+        CineplanetScraper(max_events=args.max_events),
         CinepolisScraper(max_events=args.max_events),
         PasslineScraper(max_events=args.max_events),
         TicketPlusScraper(max_pages=args.max_pages, max_events=args.max_events),
         TicketmasterScraper(max_pages=args.max_pages, max_events=args.max_events),
         EventlyScraper(max_pages=args.max_pages, max_events=args.max_events),
         PortalDiscScraper(max_pages=args.max_pages, max_events=args.max_events),
+        # Phase B: exposition events (weekly). Phase A runs separately with --enrich.
+        MuseoScraper(max_events=args.max_events),
     ]
 
     with Session() as db:
         for scraper in scrapers:
+            scraper_start = datetime.now(timezone.utc)
             logger.info("━━━ Running scraper: %s ━━━", scraper.name)
             try:
                 stats = _run_pipeline(scraper, db, dry_run=args.dry_run, verbose=args.verbose)
                 for key in totals:
                     totals[key] += stats.get(key, 0)
+                elapsed = (datetime.now(timezone.utc) - scraper_start).seconds
+                logger.info(
+                    "[%s] done in %ds — found=%d created=%d updated=%d failed=%d",
+                    scraper.name, elapsed,
+                    stats.get("found", 0), stats.get("created", 0),
+                    stats.get("updated", 0), stats.get("failed", 0),
+                )
+                scraper_ok.append(scraper.name)
             except Exception as exc:
                 logger.error("Scraper %s crashed: %s", scraper.name, exc, exc_info=True)
+                scraper_err.append(scraper.name)
 
     # ── Post-pipeline: TMDB enrichment ───────────────────────────────────────
     if not args.dry_run:
@@ -281,9 +401,17 @@ def main() -> None:
     engine.dispose()
 
     # ── Final summary ─────────────────────────────────────────────────────────
+    run_end = datetime.now(timezone.utc)
+    duration = run_end - run_start
+    duration_str = f"{duration.seconds // 60}m {duration.seconds % 60}s"
+
     print("\n" + "━" * 50)
     print("SCRAPER RUN COMPLETE" + (" (DRY RUN)" if args.dry_run else ""))
     print("━" * 50)
+    print(f"  Started : {run_start.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print(f"  Finished: {run_end.strftime('%Y-%m-%d %H:%M:%S')} UTC  ({duration_str})")
+    print(f"  Scrapers: {len(scraper_ok)} ok, {len(scraper_err)} crashed"
+          + (f"  [{', '.join(scraper_err)}]" if scraper_err else ""))
     print(f"  Found:   {totals['found']}")
     print(f"  Created: {totals['created']}")
     print(f"  Updated: {totals['updated']}")
@@ -291,6 +419,33 @@ def main() -> None:
     print(f"  Failed:  {totals['failed']}")
     print(f"  Cleaned: {cleanup['cine_deleted']} Cine + {cleanup['other_deleted']} other expired")
     print("━" * 50)
+
+    # ── Stale scraper alert ────────────────────────────────────────────────────
+    # Exit 1 when:
+    #   a) ALL scrapers crashed (existing behaviour), OR
+    #   b) ANY scraper has been failing for > 2 consecutive days (new behaviour).
+    # Railway marks exit-1 cron runs as failed and sends a notification,
+    # alerting the team before days of stale data accumulate unnoticed.
+    if scraper_err and not scraper_ok:
+        logger.error("All %d scrapers failed — exiting with code 1", len(scraper_err))
+        sys.exit(1)
+
+    if scraper_err:
+        logger.info("━━━ Checking for persistently stale scrapers ━━━")
+        with Session() as db:
+            stale = _check_stale_scrapers(scraper_err, db, stale_days=2)
+        if stale:
+            logger.error(
+                "ALERT: %d scraper(s) have been failing for >2 days: %s — exiting with code 1",
+                len(stale),
+                ", ".join(stale),
+            )
+            sys.exit(1)
+        else:
+            logger.info(
+                "Partial failures detected but all failed scrapers saved data recently "
+                "(within 2 days) — treating run as success."
+            )
 
 
 if __name__ == "__main__":

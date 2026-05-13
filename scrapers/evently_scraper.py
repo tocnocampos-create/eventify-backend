@@ -1,23 +1,31 @@
-"""Evently Chile scraper — fetches events from evently.cl listing and category pages.
+"""Evently Chile scraper — fetches events from evently.cl listing pages.
 
-Evently Chile (evently.cl) is a Next.js app with server-side rendering.
-Every page embeds a <script id="__NEXT_DATA__"> tag containing the full
-page props as JSON — this is extracted first and is the primary data source.
-HTML card parsing is used as a fallback when __NEXT_DATA__ has no event list.
+Evently Chile (evently.cl) runs on Next.js App Router (migrated from Pages
+Router).  __NEXT_DATA__ is NO LONGER injected on any page — all data is
+rendered server-side into the HTML.  HTML card parsing is the only source.
 
-Listing pages scraped:
-    https://www.evently.cl/?c=CL              (all events)
-    https://www.evently.cl/?cat=dance&c=CL
-    https://www.evently.cl/?cat=music&c=CL
-    https://www.evently.cl/?cat=comedy&c=CL
+Listing pages scraped (~28–30 unique events total, no pagination):
+    https://www.evently.cl/?c=CL              (main listing, ~28 events)
+    https://www.evently.cl/?cat=music&c=CL    (+0–2 extra, cat filter broken)
+    https://www.evently.cl/?cat=comedy&c=CL   (+0–2 extra, cat filter broken)
+    https://www.evently.cl/?cat=dance&c=CL    (+0–2 extra, cat filter broken)
+
+IMPORTANT — No pagination exists:
+    • ?page=N returns 200 but zero event links.
+    • ?cat= filter is ignored server-side; all category seeds return the same
+      12 featured events.  The main /?c=CL seed covers ~28 events.
+    • No load-more button or public API (internal /api/* requires auth token).
+    • The site is a flat single-page listing.
 
 Event detail pages live on organiser subdomains:
     https://{organizer}.evently.cl/{event-slug}
 
-Each detail page also embeds __NEXT_DATA__ with full event metadata
-(date, time, venue, description, price, image, coordinates).
+All event metadata is extracted from OpenGraph tags on detail pages.
+__NEXT_DATA__ blocks in fetch_event_detail are attempted first but always
+return {} since App Router no longer injects them.
 
-Only Santiago / Región Metropolitana events are kept (SANTIAGO_TOKENS).
+Only Santiago / Región Metropolitana events are kept (SANTIAGO_TOKENS +
+_EVENTLY_EXTRA_TOKENS for venues not covered by the shared set).
 
 source_url:
     evently:cl:{organizer}:{slug}
@@ -66,10 +74,12 @@ BASE_DOMAIN  = "evently.cl"
 
 # (url_params, category_hint, lock_category)
 # lock_category=True → _locked_category sentinel set; classifier cannot override.
+# NOTE: ?cat= filter is ignored server-side — all cat= seeds return the same
+# 12 featured events.  lock=False so the classifier can assign the real category.
 LISTING_PAGES: list[tuple[str, str | None, bool]] = [
     ("?c=CL",             None,       False),   # all categories → classifier decides
-    ("?cat=music&c=CL",   "Música",   True),
-    ("?cat=comedy&c=CL",  "Comedia",  True),
+    ("?cat=music&c=CL",   "Música",   False),   # cat= filter broken; no locking
+    ("?cat=comedy&c=CL",  "Comedia",  False),   # cat= filter broken; no locking
     ("?cat=dance&c=CL",   None,       False),   # dance → let classifier pick category
 ]
 
@@ -84,6 +94,47 @@ HEADERS = {
 }
 
 REQUEST_DELAY = 2  # seconds between requests
+
+# Extra Santiago/RM venue tokens specific to Evently.
+# These venues are not in the shared SANTIAGO_TOKENS frozenset and were
+# confirmed as genuine Santiago events in a live investigation of all detail pages.
+_EVENTLY_EXTRA_TOKENS: frozenset[str] = frozenset({
+    "omnium",               # Sala Omnium, Santiago Centro
+    "havana",               # Havana Club, Las Condes
+    "la santa",             # Bar La Santa, Santiago
+    "creme",                # La Crème Le Club, Bellavista
+    "crème",                # La Crème Le Club (with accent)
+    "freedom",              # Spot FREEDOM / Escenario Victoria, Santiago
+    "woo",                  # WOO CLUB, Vitacura
+    "pyt",                  # PYT'S PARK, Ñuñoa
+    "camce",                # CLUB CAMCE, Santiago
+    "plaza san francisco",  # Hotel Plaza San Francisco, Santiago Centro
+    "cantina",              # La Cantina Bars, Santiago
+})
+
+
+# Explicit non-Santiago city names that may appear in Evently og:descriptions.
+# If any of these are found in the description, the event is dropped regardless
+# of what venue_name says (e.g. "woo" token matching a Valparaíso event).
+_NON_SANTIAGO_CITIES: frozenset[str] = frozenset({
+    "valparaiso", "valparaíso",
+    "rancagua",
+    "concepción", "concepcion",
+    "viña del mar", "vina del mar",
+    "antofagasta",
+    "temuco",
+    "puerto montt",
+    "iquique",
+    "copiapó", "copiapo",
+})
+
+
+def _is_santiago_evently(text: str) -> bool:
+    """Like _is_santiago() but also checks _EVENTLY_EXTRA_TOKENS."""
+    if _is_santiago(text):
+        return True
+    lower = text.lower()
+    return any(tok in lower for tok in _EVENTLY_EXTRA_TOKENS)
 
 
 # ── URL helpers ───────────────────────────────────────────────────────────────
@@ -827,26 +878,73 @@ class EventlyScraper(BaseScraper):
             if og and og.get("content", "").startswith("http"):
                 result["image_url"] = og["content"]
 
-        if "description" not in result:
-            for attr, name in (("property", "og:description"), ("name", "description")):
-                meta = soup.find("meta", {attr: name})
-                if meta and meta.get("content", "").strip():
-                    txt = meta["content"].strip()
-                    if len(txt) > 10:
-                        result["description"] = txt[:1500]
-                    break
+        # og:description — mine for time, price, is_sold_out, and description text.
+        # Evently encodes event metadata in og:description even when JSON-LD is absent.
+        _og_desc_meta = soup.find("meta", {"property": "og:description"})
+        if not _og_desc_meta:
+            _og_desc_meta = soup.find("meta", {"name": "description"})
+        if _og_desc_meta:
+            _og_desc_raw = (_og_desc_meta.get("content") or "").replace("\xa0", " ").strip()
+            if _og_desc_raw:
+                _og_lower = _og_desc_raw.lower()
+
+                # is_sold_out
+                if re.search(r"sold[\s\-]?out|agotado|sin entradas", _og_lower):
+                    result.setdefault("is_sold_out", True)
+
+                # time_start
+                if "time_start" not in result:
+                    t = _parse_time_safe(_og_desc_raw)
+                    if t:
+                        result["time_start"] = t
+
+                # price_range
+                # CLP tickets range: ~$1.000 (nominal) to ~$500.000 (premium)
+                # Pre-strip patterns that produce false positives before parsing:
+                #   • years (20xx) — e.g. "El 08 de mayo de 2026"
+                #   • date strings — e.g. "29.05.2026"
+                #   • address numbers — e.g. "📍 BLANCO 889 VALPARAISO"
+                if "price_range" not in result:
+                    _price_text = re.sub(r"\b20\d{2}\b", "", _og_desc_raw)
+                    _price_text = re.sub(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", "", _price_text)
+                    # Strip "📍 WORD NNN" (address pin + street name + number)
+                    _price_text = re.sub(r"📍\s*\S+\s+\d{1,5}", "", _price_text)
+                    # Strip "STREET_MARKER NNN" — address keywords followed by a number
+                    _price_text = re.sub(
+                        r"\b(?:calle|av\.?|avda\.?|pasaje|psje\.?|blanco|huérfanos|"
+                        r"alameda|providencia|vitacura|las\s+condes|ñuñoa|barrio|"
+                        r"esquina|local)\s+\d{1,5}\b",
+                        "",
+                        _price_text,
+                        flags=re.IGNORECASE,
+                    )
+                    pr = _parse_price(_price_text)
+                    if pr is not None and isinstance(pr, (list, tuple)) and len(pr) == 2:
+                        if 1_000 <= pr[0] <= 500_000 and 1_000 <= pr[1] <= 500_000:
+                            result["price_range"] = pr
+
+                # description — only store if substantive (>= 30 chars)
+                if "description" not in result and len(_og_desc_raw) >= 30:
+                    result["description"] = _og_desc_raw[:1500]
 
         # Extract event name and venue from og:title
         # Format: "Event Name - Venue Name | Evently"
+        # Use rsplit to split on the LAST " - " only, preserving hyphens in
+        # multi-hyphen event names like "BLOOM 🌸 - 7 DE MAYO - PABLITO PESADILLA"
         og_title = soup.find("meta", {"property": "og:title"})
         if og_title:
             raw_title = og_title.get("content", "").strip()
             raw_title = raw_title.split(" | ")[0]  # drop " | Evently"
-            parts = [p.strip() for p in raw_title.split(" - ") if p.strip()]
+            parts = [p.strip() for p in raw_title.rsplit(" - ", 1) if p.strip()]
             if len(parts) >= 2 and "name" not in result:
                 result["name"] = parts[0]
             if len(parts) >= 2 and "venue_name" not in result:
                 result["venue_name"] = parts[-1]
+            elif len(parts) == 1 and "venue_name" not in result:
+                # No " - " separator — try "EVENT en VENUE" pattern (case-insensitive)
+                m = re.search(r"\ben\b(.+)$", raw_title, re.IGNORECASE)
+                if m:
+                    result["venue_name"] = m.group(1).strip()
 
         # ── 4. DOM fallback for date / venue / price ──────────────────────────
         if "date" not in result:
@@ -900,46 +998,11 @@ class EventlyScraper(BaseScraper):
     ) -> str | None:
         """Return the next listing page URL or None.
 
-        Tries (in order):
-          1. __NEXT_DATA__ pagination metadata (hasNextPage / nextPage)
-          2. rel="next" link
-          3. class-based "Next" / "Siguiente" anchor
-          4. ?page=N auto-increment (only if page had cards)
+        Evently App Router has no pagination:
+          • ?page=N returns 200 but zero event links.
+          • No rel="next", no load-more button.
+          • The listing is a flat single page of ~28–30 events.
         """
-        # 1. Next.js router pagination
-        props  = nd.get("props", {}).get("pageProps", {})
-        paging = props.get("pagination") or props.get("meta") or props.get("paging") or {}
-        if isinstance(paging, dict):
-            if not paging.get("hasNextPage") and not paging.get("next_page"):
-                # Explicit "no more pages" signal
-                if "hasNextPage" in paging:
-                    return None
-            next_pg = paging.get("next_page") or paging.get("nextPage")
-            if next_pg and isinstance(next_pg, int):
-                return _add_page_param(current_url, next_pg)
-
-        # 2. rel="next"
-        link = soup.find("a", rel=lambda v: v and "next" in v)
-        if link and link.get("href"):
-            href = link["href"]
-            return href if href.startswith("http") else BASE_URL + href
-
-        # 3. Class / text "Next"
-        link = (
-            soup.find("a", class_=re.compile(r"\bnext\b|\bsiguiente\b", re.I))
-            or soup.find("a", string=re.compile(r"siguiente|next|›|»", re.I))
-        )
-        if link and link.get("href"):
-            href = link["href"]
-            if href not in ("#", "javascript:void(0)"):
-                return href if href.startswith("http") else BASE_URL + href
-
-        # 4. ?page=N auto-increment
-        m = re.search(r"[?&]page=(\d+)", current_url)
-        if m:
-            nxt = _add_page_param(current_url, int(m.group(1)) + 1)
-            return nxt
-
         return None
 
     # ── Public fetch_events ───────────────────────────────────────────────────
@@ -1029,9 +1092,20 @@ class EventlyScraper(BaseScraper):
                         str(ev.get(f, "") or "")
                         for f in ("venue_name", "address", "name")
                     )
-                    if not _is_santiago(location_hint):
+                    if not _is_santiago_evently(location_hint):
                         logger.debug(
                             "[evently] Non-Santiago %r — skipping", ev.get("name")
+                        )
+                        continue
+
+                    # Secondary check: og:description may contain an explicit non-Santiago
+                    # city name even when the venue token matched (e.g. "woo" matching a
+                    # Valparaíso event hosted at a venue with "WOO" in the description).
+                    _desc_lower = (ev.get("description") or "").lower()
+                    if any(city in _desc_lower for city in _NON_SANTIAGO_CITIES):
+                        logger.debug(
+                            "[evently] Non-Santiago city in description for %r — skipping",
+                            ev.get("name"),
                         )
                         continue
 
@@ -1216,19 +1290,21 @@ if __name__ == "__main__":
     if args.dry_run or args.debug:
         print(f"\n── Evently dry-run: {len(events)} RM events ─────────────────────")
         for ev in events[:10]:
+            desc_preview = str(ev.get("description") or "")[:80]
             print(
-                f"\n  name      : {ev.get('name')!r}\n"
-                f"  date      : {ev.get('date')}\n"
-                f"  time_start: {ev.get('time_start')}\n"
-                f"  venue_name: {ev.get('venue_name')!r}\n"
-                f"  source_url: {ev.get('source_url')}"
+                f"\n  name       : {ev.get('name')!r}\n"
+                f"  date       : {ev.get('date')}\n"
+                f"  time_start : {ev.get('time_start')}\n"
+                f"  venue_name : {ev.get('venue_name')!r}\n"
+                f"  price_range: {ev.get('price_range')}\n"
+                f"  is_sold_out: {ev.get('is_sold_out', False)}\n"
+                f"  description: {desc_preview!r}"
             )
             if args.verbose:
                 print(
-                    f"  price     : {ev.get('price_range')}\n"
-                    f"  image_url : {ev.get('image_url')}\n"
-                    f"  category  : {ev.get('category')}\n"
-                    f"  desc      : {str(ev.get('description', ''))[:120]!r}"
+                    f"  source_url : {ev.get('source_url')}\n"
+                    f"  image_url  : {ev.get('image_url')}\n"
+                    f"  category   : {ev.get('category')}"
                 )
     else:
         from scrapers.base_scraper import make_scraper_session

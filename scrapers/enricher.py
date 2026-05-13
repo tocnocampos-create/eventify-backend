@@ -259,6 +259,14 @@ def enrich(event: dict[str, Any], db: Session) -> dict[str, Any]:
     """
     from app.db.models import Venue  # noqa: PLC0415
 
+    # If venue_id is already set (e.g. by museum scraper), trust it and only
+    # backfill venue_type — do NOT run name-matching which would override it.
+    if event.get("venue_id"):
+        venue = db.query(Venue).filter(Venue.id == event["venue_id"]).first()
+        if venue and not event.get("venue_type"):
+            event["venue_type"] = venue.venue_type
+        return event
+
     venue_name: str = (event.get("venue_name") or "").strip()
     if not venue_name:
         return event

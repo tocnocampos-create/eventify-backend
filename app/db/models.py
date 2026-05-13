@@ -2,6 +2,7 @@
 import enum
 
 from sqlalchemy import Boolean, Column, Enum, Integer, String, Float, Text, ForeignKey, Time, ARRAY, DateTime, CheckConstraint, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -74,10 +75,16 @@ class Venue(Base):
     menu_pdf_url = Column(String(500), nullable=True)
     neighborhood_id = Column(Integer, ForeignKey("neighborhoods.id"), nullable=True, index=True)
     address = Column(String(500), nullable=True)  # Street address
+    opening_hours = Column(Text, nullable=True)          # e.g. "Mar a Dom: 10:00-18:30 | Lunes cerrado"
+    permanent_collection = Column(Text, nullable=True)   # description of permanent collection
+    ticket_url = Column(String(500), nullable=True)      # URL to buy/reserve tickets
+    instagram_url = Column(String(500), nullable=True)   # Instagram profile URL
+    admission_info = Column(String(255), nullable=True)  # e.g. "Gratuito", "Desde $2.000"
     source_url = Column(String(500), nullable=True)
     is_verified = Column(Boolean, default=False, nullable=False, server_default="false")
     scraped_at = Column(DateTime(timezone=True), nullable=True)
     accessibility_features = Column(Text, nullable=True)
+    hours_json = Column(JSONB, nullable=True)              # structured weekly schedule
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
@@ -100,6 +107,7 @@ class Event(Base):
     description = Column(Text, nullable=True)
     price_range = Column(ARRAY(Float), nullable=True)  # [min_price, max_price]
     date = Column(String(50), nullable=False)  # Event date
+    date_end = Column(String(50), nullable=True)   # End date for ranged events (e.g. expositions)
     time_start = Column(String(10), nullable=True)  # HH:mm
     time_end = Column(String(10), nullable=True)  # HH:mm
     image_url = Column(String(500), nullable=True)

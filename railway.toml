@@ -1,5 +1,11 @@
 # Railway deployment configuration for the Eventify API service.
 # Docs: https://docs.railway.com/reference/config-as-code
+#
+# TWO SERVICES share this repo:
+#   1. eventify-api   — reads this file (railway.toml)
+#   2. scraper-cron   — reads railway.cron.toml
+#      In the Railway dashboard → scraper-cron service → Settings →
+#      "Config File Path": railway.cron.toml
 
 [build]
 builder = "DOCKERFILE"
@@ -14,19 +20,3 @@ healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CRON JOB — Daily scraper run at 06:00 Santiago time (09:00 UTC, UTC-3)
-# ─────────────────────────────────────────────────────────────────────────────
-# Railway cron jobs must be configured as a SEPARATE service in the dashboard.
-# When creating the second service, set these values in its settings:
-#
-#   Start command : python scrapers/run_all.py
-#   Cron schedule : 0 9 * * *
-#
-# Or via this toml block if Railway adds multi-service support for your plan:
-#
-# [[services]]
-# name = "scraper-cron"
-# startCommand = "python scrapers/run_all.py"
-# cronSchedule = "0 9 * * *"   # 09:00 UTC = 06:00 Santiago (UTC-3)

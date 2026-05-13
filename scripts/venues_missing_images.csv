@@ -1,0 +1,281 @@
+id,name,venue_type,address,upcoming_events,cover_missing,profile_missing
+464,Barderene,Bar,,29,True,True
+460,Salamaster,Espacio Cultural,,21,True,True
+463,Scd Egana,Espacio Cultural,,20,True,True
+289,Sala RBX,Sala de Concierto,,17,True,True
+465,Magbar,Bar,,10,True,True
+471,Teatromunicipaldelaflorida,Teatro,,9,True,True
+102,Centro Arte Alameda,Centro Cultural,,8,True,False
+250,Discoteca La Fama,Espacio Cultural,,8,True,True
+286,Epicentro,Espacio Cultural,,7,True,True
+262,Rustiko Huehuraba,Sala de Concierto,,7,True,True
+445,"Sala Julieta, Teatro Aleph Chile",Espacio Cultural,"Eulogio Altamirano,  La Cisterna",7,True,True
+418,Teatro Azares,Teatro,"Huérfanos, 2146 Santiago",7,True,True
+239,CorpArtes - Las Condes,Espacio Cultural,"Rosario Norte, 660 Las Condes",6,True,True
+429,Detuch,Teatro,"Morandé, 750 Santiago",6,True,True
+313,Distrito 04,Comedia,,6,True,True
+336,Happy People teatro restaurant,Espacio Cultural,"Rancagua,  Providencia",6,True,True
+457,Aulamagnausach,Cine,,5,True,True
+347,Kross Bar,Sala de Concierto,,5,True,True
+472,Mesonnerudiano,Espacio Cultural,,5,True,True
+433,Ruta 78,Espacio Cultural,"Independencia,  Puente Alto",5,True,True
+461,12Lunas,Museo,,4,True,True
+455,Bandera1001,Espacio Cultural,,4,True,True
+354,Bar de Rene,Bar,,4,True,True
+281,Centro Cultural CA660 de la Fundación CorpArtes,Espacio Cultural,"Rosario Norte,  Las Condes",4,True,True
+384,Centro De Artes Aereas,Espacio Cultural,,4,True,True
+412,El Colorado Centro de Ski,Bar,,4,True,True
+459,Lapuertaamarilla,Bar,,4,True,True
+451,"Aula Magna Biblioteca, Universidad de los Andes",Teatro,"Monseñor Álvaro del Portillo, 12455 Las Condes",3,True,True
+242,Bar Oxido,Espacio Cultural,,3,True,True
+360,Casa irarrazaval,Espacio Cultural,,3,True,True
+458,Lacasaenelaire,Bar,,3,True,True
+456,Plazavictoria,Espacio Cultural,,3,True,True
+462,Salarbx,Sala de Concierto,,3,True,True
+318,TPM Bar,Comedia,,3,True,True
+381,Agatha Bar,Bar,,2,True,True
+277,Basel Venue-Mall Barrio Independencia,Espacio Cultural,,2,True,True
+396,Bongo club San Bernardo,Sala de Concierto,"América,  San Bernardo",2,True,True
+330,Bosque Luz,Espacio Cultural,,2,True,True
+367,California Cantina,Espacio Cultural,,2,True,True
+359,Cementerio General,Espacio Cultural,,2,True,True
+404,Centro De Eventos Manhattan,Espacio Cultural,,2,True,True
+394,Club Berlín,Bar,,2,True,True
+364,Escuela Teatro Imagen,Espacio Cultural,,2,True,True
+365,Espacio El Chancho Con Chaleco,Sala de Concierto,,2,True,True
+326,Estudio oculto,Espacio Cultural,,2,True,True
+466,Metropolitan Santiago,Espacio Cultural,Av. San Josemaría Escrivá de Balaguer 5600 Santiago,2,True,True
+405,Sala Audiovisual Crearock,Sala de Concierto,,2,True,True
+430,Sala Tessier,Espacio Cultural,"Dardignac,  Recoleta",2,True,True
+448,Sambolio,Espacio Cultural,"Avenida Consistorial,  Santiago",2,True,True
+375,Secreto,Bar,,2,True,True
+344,Spot Freedom,Espacio Cultural,"Avenida Recoleta,  Recoleta",2,True,True
+43,Teatro Alicia,Club,,2,True,True
+420,Teatro Nacional Chileno,Teatro,"Morandé, 25 Santiago",2,True,True
+438,Teatro Sidarte,Espacio Cultural,"Ernesto Pinto Lagarrigue, 131 Recoleta",2,True,True
+237,Teatro Teletón - Santiago Centro,Teatro,,2,True,True
+406,Xgym,Espacio Cultural,,2,True,True
+274,12 Lunas Restobar,Espacio Cultural,,1,True,True
+288,"Antupirén #9401, Local A - Paseo El Sol, Peñalolen, Santiago De Chile",Espacio Cultural,,1,True,True
+292,Arena Recoleta,Sala de Concierto,,1,True,True
+363,Auditorio Universidad Autónoma de Chile,Espacio Cultural,,1,True,True
+371,Bendito Black,Espacio Cultural,,1,True,True
+358,Cabaret Piraña,Espacio Cultural,,1,True,True
+470,Café Rock Multiespacio,Sala de Concierto,,1,True,True
+428,Casona Hilda Parra,Espacio Cultural,"Ernesto Pinto Lagarrigue,  Recoleta",1,True,True
+468,Cenco Florida,Espacio Cultural,"Av. Vicuña Mackenna Ote. 6100, 8242155 La Florida, Región Metropolitana La florida",1,True,True
+238,Centro de Eventos Múnich - Peñaflor,Museo,,1,True,True
+436,Centro de Extensión UC,Espacio Cultural,"Avenida Alameda Libertador Bernardo O&#39;Higgins,  Santiago",1,True,True
+395,Circulo Español,Bar,,1,True,True
+361,Club Camce,Espacio Cultural,,1,True,True
+268,Club Ceira,Espacio Cultural,,1,True,True
+431,Club de la Unión,Bar,"Avenida Alameda Libertador Bernardo O&#39;Higgins,  Santiago",1,True,True
+450,"Club de Teatro, sala Pedro Orthous",Teatro,"Constitución,  Providencia",1,True,True
+373,Club Orixas,Sala de Concierto,,1,True,True
+392,Clubroom,Bar,,1,True,True
+341,Cocina Clandestina,Espacio Cultural,,1,True,True
+285,Coliseo Monumental de La Serena,Espacio Cultural,,1,True,True
+331,Comadre Lola,Espacio Cultural,,1,True,True
+446,Distrito San Ignacio,Comedia,"San Ignacio de Loyola,  San Miguel",1,True,True
+324,Divino Maipo,Sala de Concierto,,1,True,True
+356,El 7 Restorant,Espacio Cultural,,1,True,True
+376,Espacio Cero,Bar,,1,True,True
+388,Espacio Checoslovaquia,Bar,,1,True,True
+425,Espacio La Rueda,Espacio Cultural,"Siete Poniente,  Paine",1,True,True
+287,Espacio Urbano La Reina,Espacio Cultural,,1,True,True
+427,Estadio Bicentenario la Florida,Sala de Concierto,"Enrique Olivares,  La Florida",1,True,True
+454,Ex Fábrica,Espacio Cultural,"Seúl,  Recoleta",1,True,True
+275,Fundación Chile,Espacio Cultural,,1,True,True
+408,Gimnasio DB BOXING,Espacio Cultural,,1,True,True
+383,Gimnasio Nuevo Box,Espacio Cultural,,1,True,True
+416,"gimnasio unity las condes - Av. Las Condes 9460, Piso -1, 7591092 Las Condes, Región Metropolitana",Espacio Cultural,,1,True,True
+442,Hangar,Bar,"Santa Filomena,  Recoleta",1,True,True
+254,Harvard Bellavista,Bar,,1,True,True
+240,Hipódromo Chile - Independencia,Teatro,,1,True,True
+467,Hotel Sheraton,Espacio Cultural,Av. Sta. María 1742 Santiago,1,True,True
+397,House Rock & Blues,Sala de Concierto,,1,True,True
+382,Impacto Club,Sala de Concierto,,1,True,True
+434,INACAP Vitacura,Espacio Cultural,"Avenida Vitacura,  Vitacura",1,True,True
+368,Incognito,Sala de Concierto,,1,True,True
+415,Insert Coin Bar,Espacio Cultural,,1,True,True
+282,Insert Coin Ñuñoa,Bar,,1,True,True
+414,Jardín de Gente,Sala de Concierto,,1,True,True
+280,La Casona de Hilda Parra,Espacio Cultural,,1,True,True
+411,La Chimenea,Sala de Concierto,,1,True,True
+379,La Fuente Maestra,Espacio Cultural,,1,True,True
+370,La Juguera,Espacio Cultural,,1,True,True
+400,La Quinta Murano’s,Espacio Cultural,,1,True,True
+435,LA REINA (Por confirmar),Espacio Cultural,",  La Reina",1,True,True
+399,Loreto 435,Espacio Cultural,,1,True,True
+355,Maestra Vida,Espacio Cultural,,1,True,True
+362,Mercado Urbano Tobalaba,Teatro,,1,True,True
+332,Mi Bar,Espacio Cultural,,1,True,True
+151,Monumento Natural El Morado,Monumento Natural,,1,True,True
+385,Multiespaciomitosdelmaipo,Espacio Cultural,,1,True,True
+374,Munich Malloco,Espacio Cultural,,1,True,True
+391,Mystic Valley,Espacio Cultural,,1,True,True
+398,Nueva cero discotheque,Bar,,1,True,True
+378,Otto Fritz Restobar,Espacio Cultural,,1,True,True
+166,Parque Estadio Nacional,Parque,Av. Marathón Santiago,1,True,True
+403,Parque La Araucana Pehuèn,Museo,,1,True,True
+143,Parque Mahuida,Parque,,1,True,True
+357,Patio Bulnes,Espacio Cultural,,1,True,True
+393,Pehuen SPA,Sala de Concierto,,1,True,True
+333,Peluquería Francesa,Espacio Cultural,,1,True,True
+390,Plaza Victoria,Espacio Cultural,,1,True,True
+452,"Polideportivo 1, Parque Estadio.",Espacio Cultural,"Avenida Pedro de Valdivia, 4801 Ñuñoa",1,True,True
+284,Por Confirmar,Espacio Cultural,,1,True,True
+372,Porto Alegre,Bar,,1,True,True
+276,Radisson Blu Plaza El Bosque Santiago Chile,Espacio Cultural,,1,True,True
+353,Refugio del Sol,Sala de Concierto,,1,True,True
+377,Restaurant El 7,Espacio Cultural,,1,True,True
+366,Restobar Calabria,Comedia,,1,True,True
+410,Restobar La Turbina,Espacio Cultural,,1,True,True
+409,Restobar Lomito Bueno,Espacio Cultural,,1,True,True
+291,Rockstar Karaoke Stage,Sala de Concierto,,1,True,True
+469,Saint George´s College,Espacio Cultural,"Santa Cruz 5400, 7660103 Vitacura, Región Metropolitana Santiago",1,True,True
+343,Sala Pandora,Espacio Cultural,,1,True,True
+389,Sala Voy y Vuelvo,Comedia,,1,True,True
+402,Salon Bearcade,Espacio Cultural,,1,True,True
+453,Salón de Honor Álvaro del Portillo,Teatro,"San Carlos de Apoquindo,  Las Condes",1,True,True
+369,Teatro (Bar la Trova),Teatro,,1,True,True
+432,Teatro Colegio San Ignacio El Bosque,Teatro,"Avenida Pocuro,  Providencia",1,True,True
+386,Teatro Comunitario Novedades,Teatro,,1,True,True
+419,Teatro del Puente,Teatro,"Río Mapocho, entre puentes Pío Nono y Purísima,  Santiago",1,True,True
+279,Teatro Educativo de las Artes de Panguipulli,Teatro,,1,True,True
+290,Teatro ex Mundo Magico,Espacio Cultural,,1,True,True
+278,Teatro Mori Parque Arauco,Espacio Cultural,,1,True,True
+283,Teatro Municipal Antofagasta,Espacio Cultural,,1,True,True
+265,Teatro Palermo  Puente Alto,Teatro,,1,True,True
+413,Technobus,Espacio Cultural,,1,True,True
+335,Terraza Arrayan,Bar,,1,True,True
+449,Tio Tomate,Comedia,"San Lucas,  Lo Barnechea",1,True,True
+380,Tvn,Espacio Cultural,,1,True,True
+387,VIVO Los Trapenses,Bar,,1,True,True
+401,Wao 2.0,Sala de Concierto,,1,True,True
+407,Zapping Sport Center,Espacio Cultural,,1,True,True
+350,2.0 Premium,Espacio Cultural,,0,True,True
+441,2.0 San Pablo,Bar,"San Pablo,  Lo Prado",0,True,True
+10,Ambar Restobar,Bar,,0,True,True
+322,Asociación Enoturismo Chile,Espacio Cultural,,0,True,True
+439,Asuncion #426 esquina Patronato,Bar,"Asunción, 426 Recoleta",0,True,True
+327,Aura club,Espacio Cultural,,0,True,True
+25,Bar Loreto,Bar,,0,True,True
+315,Bar Ramblas,Bar,,0,True,True
+447,Boston College Maipú,Espacio Cultural,"Longitudinal,  Maipú",0,True,True
+342,Botánico Centro De Eventos,Espacio Cultural,,0,True,True
+30,Cajacústica,Club,,0,True,True
+249,Calabria Restobar,Espacio Cultural,,0,True,True
+266,Casa Bellavista,Bar,,0,True,True
+28,Casa Conejo,Bar,,0,True,True
+320,Casa Irarrázabal,Comedia,,0,True,True
+348,Casa Mayor De Chena,Sala de Concierto,,0,True,True
+103,Centro Cultural El Tranque,Centro Cultural,,0,True,True
+52,Centro Cultural Lo Prado,Teatro,,0,True,True
+99,Centro Cultural Palacio de la Alhambra (SNBA),Centro Cultural,,0,True,True
+323,Centro de Eventos Ignis,Bar,,0,True,True
+426,Centro de eventos Tumbaos,Espacio Cultural,"Avenida San José,  San Bernardo",0,True,True
+144,Cerro Manquehue,Cerro,,0,True,True
+146,Cerro Pochoco,Cerro,,0,True,True
+145,Cerro Provincia,Cerro,,0,True,True
+156,Cerro Santa Lucía,Cerro,,0,True,True
+139,Cineplanet Florida Center,Cine,,0,True,True
+137,Cineplanet Mallplaza Alameda,Cine,,0,True,True
+138,Cineplanet Mallplaza Norte,Cine,,0,True,True
+136,Cineplanet Plaza Tobalaba,Cine,,0,True,True
+140,Cineplanet San Carlos,Cine,,0,True,True
+115,Cineteca U de Chile,Cine,,0,True,False
+73,Claro Arena,Arena,,0,True,False
+34,Club Ambar,Club,,0,True,True
+334,Club Caribeño,Bar,,0,True,True
+267,Club La Casona,Espacio Cultural,,0,True,True
+321,Club La Rubia,Bar,,0,True,True
+337,Club Olimpo,Sala de Concierto,,0,True,True
+243,Club Soda Bellavista,Espacio Cultural,,0,True,True
+244,Costa cuervo Chillán Discoteca,Espacio Cultural,,0,True,True
+269,Coyotes Club Maipu,Bar,,0,True,True
+424,Csa,Espacio Cultural,"Camino Guay Guay,  Colina",0,True,True
+263,Distrito 4,Espacio Cultural,,0,True,True
+422,Edificio Deportes CD UC,Espacio Cultural,"Camino Las Flores, 13000 Las Condes",0,True,True
+340,Espacio Cinza,Espacio Cultural,,0,True,True
+246,Espacio Municipal de La Pintana,Espacio Cultural,,0,True,True
+444,Estadio Barnechea,Espacio Cultural,"Camino Circunvalación Norte,  Lo Barnechea",0,True,True
+437,Estadio Bicentenario de La Florida,Sala de Concierto,"Enrique Olivares, 1003 La Florida",0,True,True
+345,Estadio Estrella M. Rodriguez,Espacio Cultural,,0,True,True
+253,Estadio German Becker,Bar,,0,True,True
+251,Estadio La Granja,Espacio Cultural,,0,True,True
+314,Estadio Lo Barnechea,Espacio Cultural,,0,True,True
+255,"Estadio Municipal de Recoleta, Leonel Sánchez",Espacio Cultural,,0,True,True
+257,Estadio Municipal De Rengo,Espacio Cultural,,0,True,True
+258,Estadio Tucapel Bustamante Lastra,Espacio Cultural,,0,True,True
+440,Ex Restaurante Granja Educativa,Bar,"Camino Las Parcelas,  Isla de Maipo",0,True,True
+346,Factoría Franklin,Espacio Cultural,,0,True,True
+317,Facultad de Teatro Universidad Mayor,Cine,,0,True,True
+17,Fortunatos Bar,Bar,,0,True,False
+349,Fuente Maestra Chicureo,Comedia,"Avenida Chicureo, 1700 Colina",0,True,True
+256,Gimnasio Carlos Flores,Espacio Cultural,"Santo Domingo,  Puente Alto",0,True,True
+19,Gran Refugio Mall Plaza Egaña,Bar,,0,False,True
+264,Hijas del Trabajo - Miraflores #1058,Bar,,0,True,True
+259,Hilaria,Espacio Cultural,,0,True,True
+22,Honesto Mike Barrio Lastarria,Bar,,0,True,True
+23,Honesto Mike Providencia,Bar,,0,True,True
+245,Hotel Best Western Marina Las Condes,Espacio Cultural,,0,True,True
+260,Hotel Cumbres Lastarria,Museo,,0,True,True
+247,Hotel Pullman Santiago Vitacura,Bar,,0,True,True
+273,Hotel Pullman Vitacura,Espacio Cultural,,0,True,True
+142,Jardín Japonés de la Amistad,Parque,,0,True,True
+325,Ludum Bar,Bar,,0,True,True
+248,Mall Arauco el Bosque,Espacio Cultural,,0,True,True
+352,Montañita Restobar Las Vizcachas,Bar,,0,True,True
+443,Municipal Irene Velásquez,Espacio Cultural,"Balmaceda, 265 Puente Alto",0,True,True
+79,Museo de Arte Contemporáneo (MAC) – Quinta Normal,Museo,,0,False,True
+91,Museo Postal y Telegráfico,Museo,,0,False,True
+171,Parque André Jarlán,Parque,,0,True,True
+159,Parque Araucano,Parque,,0,True,True
+170,Parque Bernardo Leighton,Parque,,0,True,True
+157,Parque Bicentenario de Cerrillos,Parque,,0,True,True
+158,Parque Bicentenario de la Infancia,Parque,,0,True,True
+153,Parque Bosque Panul,Bosque,,0,True,True
+155,Parque Cerro del Medio,Parque,,0,True,True
+163,Parque de la Familia,Parque,,0,True,True
+177,Parque de las Esculturas,Parque,,0,True,True
+162,Parque de los Reyes,Parque,,0,True,True
+161,Parque Forestal,Parque,,0,True,True
+164,Parque Inés de Suárez,Parque,,0,True,True
+167,Parque La Bandera,Parque,,0,True,True
+169,Parque La Castrina,Parque,,0,True,True
+174,Parque La Reina,Parque,,0,True,True
+180,Parque las Hualtatas,Parque,,0,True,True
+154,Parquemet Bosque Santiago,Bosque,,0,True,True
+141,Parque Metropolitano de Santiago,Parque,,0,True,True
+168,Parque Municipal Pueblito de Las Vizcachas,Parque,,0,True,True
+152,Parque Nacional Río Clarillo,Parque Nacional,,0,True,True
+147,Parque Natural Aguas de Ramón,Parque,,0,True,True
+149,Parque Natural Quebrada de Macul,Parque,,0,True,True
+165,Parque Observatorio Cerro Calán,Parque,,0,True,True
+271,Parque Orione  (Ex Cuca Lonquen),Espacio Cultural,,0,True,True
+172,Parque Pierre Dubois,Parque,,0,True,True
+160,Parque Quinta Normal,Parque,,0,True,True
+175,Parque Ramón Cruz,Parque,,0,True,True
+173,Parque San Borja,Parque,,0,True,True
+176,Parque Santa Rosa de Apoquindo,Parque,,0,True,True
+179,Parque Viña Cousiño Macul,Parque,,0,True,True
+417,Planetario de Santiago,Comedia,"Premio Nobel,  Huechuraba",0,True,True
+261,Polideportivo La Florida,Espacio Cultural,,0,True,True
+339,Pueblito De Artesanos De Pirque,Sala de Concierto,,0,True,True
+423,Pueblito Las Vizcachas,Espacio Cultural,"Camino A San José del Maipo,  Puente Alto",0,True,True
+329,Restaurante Irasushi,Bar,,0,True,True
+319,RockStar Stage,Comedia,,0,True,True
+316,Sala de Teatro Agustín Siré,Teatro,,0,True,True
+328,Sala Los Leones,Bar,,0,True,True
+148,Salto de Apoquindo,Salto,,0,True,True
+150,Santuario de la Naturaleza Yerba Loca,Santuario,,0,True,True
+351,Secret Spot,Espacio Cultural,,0,True,True
+421,Teatro Lospleimovil,Teatro,"Dardignac, 91 Recoleta",0,True,True
+272,Teatro Municipal de San Miguel,Espacio Cultural,,0,True,True
+241,Teatro Regional Cervantes,Sala de Concierto,,0,True,True
+56,Teatro Roma,Teatro,,0,True,True
+178,Templo Bahai,Parque,,0,True,True
+338,Tom House Cruising Bar,Bar,,0,True,True
+252,TPM Pedro de Valdivia,Espacio Cultural,,0,True,True
+270,Valle Hermoso,Espacio Cultural,,0,True,True

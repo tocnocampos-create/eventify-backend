@@ -20,9 +20,10 @@ import psycopg2
 # ── Config ────────────────────────────────────────────────────────────────────
 
 cloudinary.config(
-    cloud_name=os.environ["CLOUDINARY_CLOUD_NAME"],
-    api_key=os.environ["CLOUDINARY_API_KEY"],
-    api_secret=os.environ["CLOUDINARY_API_SECRET"],
+    cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME", "dkugv4x31"),
+    api_key=os.environ.get("CLOUDINARY_API_KEY", "539135763925632"),
+    api_secret=os.environ.get("CLOUDINARY_API_SECRET", "aVSc6wZGpbeISO7Nw0Y_-_9pw8Q"),
+    secure=True,
 )
 
 ASSETS_DIR = Path(
@@ -31,7 +32,7 @@ ASSETS_DIR = Path(
 )
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/eventify",
+    "postgresql://postgres:MbowHygexBYnHROAJguYAaccBeNIrvwz@shuttle.proxy.rlwy.net:17408/railway",
 )
 
 # ── Manual slug → venue id mapping ───────────────────────────────────────────
@@ -163,7 +164,7 @@ SLUG_TO_VENUE_ID: Dict[str, Optional[int]] = {
     "omnilab":           45,
     "riesco":            42,
     "salabella":         48,
-    "salaceina":        118,
+    "salaceina":        102,   # Centro Arte Alameda (cover only)
     "salaegana":         49,
     "salagente":         39,
     "salak":            113,
@@ -178,6 +179,34 @@ SLUG_TO_VENUE_ID: Dict[str, Optional[int]] = {
 
     # Other
     "loprado":           52,
+
+    # Part-4 new uploads
+    "corpartes":        239,
+    "casaira":          360,
+    "tpmbar":           318,
+    "distrito04":       313,
+    "lacasaenelaire":   458,
+    "teatromunicipallaflorida": 471,
+    "lafama":           250,
+    "epicentro":        286,
+    "rustikohuechuraba": 262,
+    "teatroaleph":      445,
+    "teatroazares":     418,
+    "detuch":           429,
+    "happypeople":      336,
+    "klubkross":        347,
+    "elmesonnerudiano": 472,
+    "ruta78":           433,
+    "cdareas":          384,
+    "elcolorado":       412,
+    "plazavictoria":    456,
+    "uandes":           451,
+    "oxido":            242,
+    "bongoclub":        396,
+    "bosqueluz":        330,
+    "fundacionchile":   275,
+    "agathabar":        381,
+    "salarbx":         None,   # not in DB yet
 }
 
 
@@ -212,9 +241,17 @@ def fuzzy_match(slug: str, venues: List[Tuple[int, str]], threshold: float = 0.5
 
 
 def parse_image_files(assets_dir: Path) -> List[dict]:
-    """Return list of {path, slug, kind} for every PNG in assets_dir."""
+    """Return list of {path, slug, kind} for every image in assets_dir."""
     images = []
-    for p in sorted(assets_dir.glob("*.png")):
+    patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.svg"]
+    seen: set[str] = set()
+    all_paths = []
+    for pattern in patterns:
+        all_paths.extend(assets_dir.glob(pattern))
+    for p in sorted(set(all_paths)):
+        if p.name in seen:
+            continue
+        seen.add(p.name)
         name = p.stem  # e.g. "bar-el-clan-cover"
         if name.endswith("-cover"):
             slug = name[: -len("-cover")]
@@ -272,7 +309,11 @@ def main() -> None:
                 continue
             match_source = "fuzzy"
 
-        vname = venue_by_id[venue_id]
+        vname = venue_by_id.get(venue_id)
+        if vname is None:
+            skipped_no_db.append(slug)
+            print(f"  [{i:3}/{total}] SKIP   {path.name}  (venue id={venue_id} not in DB)")
+            continue
 
         # ── Upload to Cloudinary ──────────────────────────────────────────
         public_id = f"eventify/venues/{slug}-{kind}"

@@ -1,12 +1,21 @@
 """Search service for filtering venues and events."""
+import unicodedata
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from sqlalchemy import cast, or_, func, String
+from sqlalchemy import cast, or_, and_, func, String
 from sqlalchemy.dialects.postgresql import ARRAY as PgARRAY
 from sqlalchemy.orm import Session, Query
 from app.db.models import Venue, Event
 from app.services.coordinate_filter import filter_by_coordinate_bounds
+
+
+def _strip_accents(s: str) -> str:
+    """Remove combining diacriticals: á→a, é→e, ñ→n, etc."""
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s)
+        if unicodedata.category(c) != "Mn"
+    )
 
 # Maps SearchScreen pill keys → keywords stored in the events.keywords array.
 # Used to filter events server-side when keyword_category is provided.
@@ -75,9 +84,51 @@ class SearchFilters:
         return all([self.min_lat, self.max_lat, self.min_lon, self.max_lon])
 
 
+def _fuzzy_condition(col, q: str):
+    """
+    Multi-strategy fuzzy match condition for a string column against query q.
+
+    Strategy 1 — Unaccented substring: handles accent variants (café→cafe).
+    Strategy 2 — Token order-independence: splits q into words; all tokens
+                 must appear somewhere in the column (any order).
+                 E.g. "arauco mori" matches "Teatro Mori Parque Arauco".
+    Strategy 3 — pg_trgm similarity: catches short-distance typos.
+                 Threshold 0.25 is intentionally low to catch abbreviations
+                 like "rbx" matching "Sala RBX".
+
+    Uses func.unaccent() (PostgreSQL unaccent extension) on both sides so
+    accent normalization happens in the DB, consistent with how data is stored.
+    """
+    q_norm = _strip_accents(q.lower())
+    tokens = [t for t in q_norm.split() if t]
+
+    # Strategy 1: full unaccented substring
+    s1 = func.unaccent(func.lower(col)).ilike(f"%{q_norm}%")
+
+    # Strategy 2: all tokens present in any order
+    if len(tokens) > 1:
+        s2 = and_(*[
+            func.unaccent(func.lower(col)).ilike(f"%{t}%")
+            for t in tokens
+        ])
+    else:
+        s2 = None
+
+    # Strategy 3: trigram similarity (requires pg_trgm extension)
+    s3 = func.similarity(
+        func.unaccent(func.lower(col)),
+        func.unaccent(q_norm),
+    ) > 0.25
+
+    conditions = [s1, s3]
+    if s2 is not None:
+        conditions.append(s2)
+    return or_(*conditions)
+
+
 class SearchService:
     """Service for searching and filtering venues and events."""
-    
+
     def __init__(self, db: Session):
         """
         Initialize SearchService with database session.
@@ -172,12 +223,13 @@ class SearchService:
             Query with event filters applied
         """
         if filters.q is not None:
-            pattern = f"%{filters.q}%"
             event_query = event_query.filter(
                 or_(
-                    Event.name.ilike(pattern),
-                    Event.description.ilike(pattern),
-                    func.array_to_string(Event.keywords, ' ').ilike(pattern),
+                    _fuzzy_condition(Event.name, filters.q),
+                    _fuzzy_condition(Event.description, filters.q),
+                    func.array_to_string(Event.keywords, ' ').ilike(
+                        f"%{_strip_accents(filters.q.lower())}%"
+                    ),
                 )
             )
 
@@ -254,7 +306,7 @@ class SearchService:
             matching_events = event_query.all()
             venue_ids = self._extract_venue_ids_from_events(matching_events)
 
-            conditions = [Venue.name.ilike(f"%{filters.q}%")]
+            conditions = [_fuzzy_condition(Venue.name, filters.q)]
             if venue_ids:
                 conditions.append(Venue.id.in_(venue_ids))
 
@@ -335,7 +387,7 @@ class SearchService:
             Query with venue filters applied
         """
         if filters.q is not None:
-            venue_query = venue_query.filter(Venue.name.ilike(f"%{filters.q}%"))
+            venue_query = venue_query.filter(_fuzzy_condition(Venue.name, filters.q))
 
         if filters.venue_type is not None:
             venue_query = venue_query.filter(Venue.venue_type == filters.venue_type)

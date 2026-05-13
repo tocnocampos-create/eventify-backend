@@ -1,15 +1,25 @@
 """Ticketmaster Chile scraper — fetches events from static HTML listing pages.
 
-Ticketmaster Chile (ticketmaster.cl) serves server-rendered HTML.
-Events appear on the homepage and on paginated listing pages.
+Ticketmaster Chile (ticketmaster.cl) serves server-rendered HTML via Rendr.js.
+All events are in the initial HTML response — there is no infinite scroll and
+no usable public API (the internal /api/* endpoints require an auth token and
+return 403 to all unauthenticated requests).
+
+The homepage exposes only ~29 of ~123 total unique events (capped by section
+widget limits). The remaining ~94 events are on flat category sub-pages, each
+a complete single-page listing with no pagination:
+
+  /                     → ~29 unique events (homepage widget caps)
+  /page/musica          → ~56 events (full music category)
+  /page/artes-y-teatro  → ~56 events (full arts/theater category)
+  /page/deportes        → ~5 events (sports)
+  /page/ferias-y-expo   → ~5 events (expo/trade shows)
+
+Deduplication by source_url prevents double-counting events that appear on
+multiple pages.
+
 Each event card links to a detail page that carries full metadata
 (date, venue, description) often also embedded as JSON-LD.
-
-Listing entry points scraped (in order):
-    https://www.ticketmaster.cl/               (homepage)
-    https://www.ticketmaster.cl/listing        (main catalogue, if present)
-
-Pagination follows rel="next" / class="next" / ?page=N patterns.
 
 Only Santiago / Región Metropolitana events are kept.
 
@@ -54,12 +64,16 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.ticketmaster.cl"
 
-# Listing pages to seed the scraper.
-# The scraper will follow pagination from each seed URL.
+# All listing seeds.
+# These are genuine separate pages (not redirects) — each renders a different
+# set of events in the initial HTML with no pagination. Deduplication by
+# source_url in fetch_events() handles any overlap between pages.
 LISTING_SEEDS: list[str] = [
-    f"{BASE_URL}/",
-    f"{BASE_URL}/es/tmus/home",
-    f"{BASE_URL}/listing",
+    f"{BASE_URL}/",                         # homepage  (~29 events)
+    f"{BASE_URL}/page/musica",              # music     (~56 events)
+    f"{BASE_URL}/page/artes-y-teatro",      # arts      (~56 events)
+    f"{BASE_URL}/page/deportes",            # sports    (~5 events)
+    f"{BASE_URL}/page/ferias-y-expo",       # expo      (~5 events)
 ]
 
 HEADERS = {
@@ -74,6 +88,19 @@ HEADERS = {
 }
 
 REQUEST_DELAY = 2  # seconds between requests
+
+# Venue names that are just city/country placeholders — discard these and
+# fall back to the listing card value (grid-label) instead.
+_GENERIC_VENUES: frozenset[str] = frozenset({
+    "santiago de chile",
+    "santiago",
+    "chile",
+    "region metropolitana",
+    "región metropolitana",
+    "rm",
+    "metropolitan region",
+    "gran santiago",
+})
 
 
 # ── URL helpers ───────────────────────────────────────────────────────────────
@@ -129,6 +156,23 @@ def _parse_date_safe(raw: str) -> str | None:
     # Prose date range — take first part only
     first_part = raw.split(" - ")[0].split(" al ")[0].strip()
     return _parse_date_es(first_part)
+
+
+# Matches short strings that are really date prose, not descriptions.
+# Examples: "13 de Mayo 2026", "Mayo 2026", "30 y 31 de Mayo 2026"
+_DATE_LIKE_RE = re.compile(
+    r"^\s*(?:\d{1,2}(?:\s+y\s+\d{1,2})?\s+de\s+)?[a-záéíóúüñ]+\s+\d{4}\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_date_like(s: str) -> bool:
+    """Return True if s looks like a date string, not a real description."""
+    if not s:
+        return True
+    if len(s) > 80:  # real descriptions are longer
+        return False
+    return bool(_DATE_LIKE_RE.match(s))
 
 
 def _parse_month_only(raw: str) -> str | None:
@@ -356,7 +400,8 @@ class TicketmasterScraper(BaseScraper):
             if d:
                 event["date"] = d
             t = _parse_time_str(time_el.get("datetime") or "")
-            if t:
+            # T00:00 is a placeholder, not a real time — treat as unknown
+            if t and t != "00:00":
                 event["time_start"] = t
 
         if not event.get("date"):
@@ -393,7 +438,7 @@ class TicketmasterScraper(BaseScraper):
                 # grid-label sometimes contains nested <span class="hide"> with city
                 # Keep only the top-level text (venue name, not city)
                 text = gl.get_text(strip=True)
-                if text:
+                if text and text.lower() not in _GENERIC_VENUES:
                     event["venue_name"] = text
 
         if not event.get("venue_name"):
@@ -419,6 +464,13 @@ class TicketmasterScraper(BaseScraper):
                 if pr:
                     event["price_range"] = pr
                     break
+
+        # ── Sold out detection ────────────────────────────────────────────────
+        card_text = card.get_text(" ", strip=True).lower()
+        if re.search(r"agotado|sold[\s\-]?out|no disponible", card_text):
+            event["is_sold_out"] = True
+        else:
+            event["is_sold_out"] = False
 
         return event
 
@@ -459,7 +511,8 @@ class TicketmasterScraper(BaseScraper):
                     if d:
                         result["date"] = d
                     t = _parse_time_str(re.sub(r"^\d{4}-\d{2}-\d{2}", "", start))
-                    if t:
+                    # T00:00:00 is a placeholder — treat as unknown time
+                    if t and t != "00:00":
                         result["time_start"] = t
 
                     # Ticketmaster CL often omits startDate — the date is placed
@@ -483,7 +536,9 @@ class TicketmasterScraper(BaseScraper):
                     loc = item.get("location") or {}
                     if isinstance(loc, dict):
                         vname = loc.get("name") or ""
-                        if vname:
+                        # Discard generic city/country placeholders; the
+                        # listing card's grid-label value is more specific.
+                        if vname and vname.strip().lower() not in _GENERIC_VENUES:
                             result["venue_name"] = vname.strip()
                         addr = loc.get("address") or {}
                         if isinstance(addr, dict):
@@ -497,9 +552,10 @@ class TicketmasterScraper(BaseScraper):
                         result["venue_name"] = loc.strip()
 
                     # Price
+                    # offers may be a dict, a list of dicts, or an empty list.
                     offers = item.get("offers") or {}
                     if isinstance(offers, list):
-                        offers = offers[0]
+                        offers = offers[0] if offers else {}  # empty list → no offers
                     if isinstance(offers, dict):
                         low  = offers.get("price") or offers.get("lowPrice")
                         high = offers.get("highPrice") or low
@@ -510,8 +566,11 @@ class TicketmasterScraper(BaseScraper):
                                 pass
 
                     # Description
+                    # TM CL often puts the date ("13 de Mayo 2026") in the
+                    # description field — discard those and fall through to
+                    # og:description instead.
                     desc = (item.get("description") or "").strip()
-                    if len(desc) > 10:
+                    if desc and not _is_date_like(desc) and len(desc) > 10:
                         result["description"] = desc[:1500]
 
                     # Image
@@ -560,7 +619,7 @@ class TicketmasterScraper(BaseScraper):
             desc_el = soup.find(itemprop="description")
             if desc_el:
                 txt = desc_el.get_text(" ", strip=True)
-                if len(txt) > 10:
+                if len(txt) > 10 and not _is_date_like(txt):
                     result["description"] = txt[:1500]
 
         # ── 3. OpenGraph tags ─────────────────────────────────────────────────
@@ -575,8 +634,11 @@ class TicketmasterScraper(BaseScraper):
                 og_desc = soup.find("meta", {"name": "description"})
             if og_desc and og_desc.get("content"):
                 txt = og_desc["content"].strip()
-                if len(txt) > 10:
+                if len(txt) > 10 and not _is_date_like(txt):
                     result["description"] = txt[:1500]
+                else:
+                    # og:description is also date-like or empty — store nothing
+                    result["description"] = ""
 
         # ── 4. DOM class selectors ────────────────────────────────────────────
         if "date" not in result:
@@ -677,19 +739,25 @@ class TicketmasterScraper(BaseScraper):
     # ── Public fetch_events ───────────────────────────────────────────────────
 
     def fetch_events(self) -> list[dict[str, Any]]:
-        """Fetch Santiago events from all listing seed URLs, following pagination.
+        """Fetch Santiago events from all listing seed URLs.
 
+        Each seed is a flat single-page listing (no pagination).
         For each seed URL:
           1. Detect event cards on the listing page
           2. Parse stub data from each card (name, image, listing-level date)
           3. Fetch each event's detail page for full date, venue, description
           4. Apply Santiago/RM filter
-          5. Deduplicate by source_url across all seeds
+          5. Deduplicate by source_url across all seeds via seen_urls
 
         Returns a flat list of event dicts ready for classifier + enricher.
+        Each event dict carries a `_source_seed` key (stripped URL path) for
+        diagnostics — it is not persisted to the database.
         """
-        all_events: list[dict[str, Any]] = []
-        seen_urls:  set[str] = set()
+        all_events:      list[dict[str, Any]] = []
+        seen_urls:       set[str] = set()  # dedup across seeds
+        total_candidates = 0              # unique URLs fetched (before filter)
+        total_no_date    = 0
+        total_non_santiago = 0
 
         for seed_url in LISTING_SEEDS:
             logger.info("[ticketmaster] Seeding from %s", seed_url)
@@ -724,6 +792,9 @@ class TicketmasterScraper(BaseScraper):
                     if not detail_url or detail_url in seen_urls:
                         continue
 
+                    total_candidates += 1
+                    ev["_source_seed"] = seed_url  # diagnostics only
+
                     # Fetch detail page
                     detail = self.fetch_event_detail(detail_url)
                     for key, val in detail.items():
@@ -734,6 +805,9 @@ class TicketmasterScraper(BaseScraper):
                         logger.debug(
                             "[ticketmaster] No date for %r — skipping", ev.get("name")
                         )
+                        total_no_date += 1
+                        # Still mark as seen so other seeds don't re-fetch
+                        seen_urls.add(detail_url)
                         continue
 
                     # Santiago / RM filter
@@ -745,6 +819,8 @@ class TicketmasterScraper(BaseScraper):
                         logger.debug(
                             "[ticketmaster] Non-Santiago %r — skipping", ev.get("name")
                         )
+                        total_non_santiago += 1
+                        seen_urls.add(detail_url)
                         continue
 
                     seen_urls.add(detail_url)
@@ -779,7 +855,11 @@ class TicketmasterScraper(BaseScraper):
             if self.max_events and len(all_events) >= self.max_events:
                 break
 
-        logger.info("[ticketmaster] Total events collected: %d", len(all_events))
+        logger.info(
+            "[ticketmaster] Summary — candidates: %d  no_date: %d  "
+            "non_santiago: %d  kept: %d",
+            total_candidates, total_no_date, total_non_santiago, len(all_events),
+        )
         return all_events
 
     # ── Debug helper ──────────────────────────────────────────────────────────
@@ -892,20 +972,33 @@ if __name__ == "__main__":
     events = scraper.fetch_events()
 
     if args.dry_run or args.debug:
+        homepage_seed = f"{BASE_URL}/"
+        homepage_events   = [e for e in events if e.get("_source_seed") == homepage_seed]
+        category_events   = [e for e in events if e.get("_source_seed") != homepage_seed]
+
         print(f"\n── Ticketmaster dry-run: {len(events)} RM events ───────────────")
-        for ev in events[:10]:
+        print(f"   from homepage       : {len(homepage_events)}")
+        print(f"   from category pages : {len(category_events)}")
+
+        # Show up to 10 events — first 3 are from category pages (new seeds)
+        sample = category_events[:3] + homepage_events[:7]
+        for ev in sample:
+            desc_preview = str(ev.get("description") or "")[:80]
+            seed_label = ev.get("_source_seed", "").replace(BASE_URL, "")
             print(
-                f"\n  name      : {ev.get('name')!r}\n"
-                f"  date      : {ev.get('date')}\n"
-                f"  time_start: {ev.get('time_start')}\n"
-                f"  venue_name: {ev.get('venue_name')!r}\n"
-                f"  source_url: {ev.get('source_url')}"
+                f"\n  [seed: {seed_label}]\n"
+                f"  name       : {ev.get('name')!r}\n"
+                f"  date       : {ev.get('date')}\n"
+                f"  time_start : {ev.get('time_start')}\n"
+                f"  venue_name : {ev.get('venue_name')!r}\n"
+                f"  price_range: {ev.get('price_range')}\n"
+                f"  is_sold_out: {ev.get('is_sold_out')}\n"
+                f"  description: {desc_preview!r}"
             )
             if args.verbose:
                 print(
-                    f"  price     : {ev.get('price_range')}\n"
-                    f"  image_url : {ev.get('image_url')}\n"
-                    f"  desc      : {str(ev.get('description', ''))[:120]!r}"
+                    f"  image_url  : {ev.get('image_url')}\n"
+                    f"  source_url : {ev.get('source_url')}"
                 )
     else:
         from scrapers.base_scraper import make_scraper_session

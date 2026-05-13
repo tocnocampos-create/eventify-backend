@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 #   subsequent runs keep it up-to-date if the venue row changes.
 # category/keywords: re-classification may improve these as the classifier rules evolve.
 _MUTABLE_FIELDS = (
-    "price_range", "date", "image_url", "scraped_at",
+    "price_range", "date", "date_end", "image_url", "scraped_at",
     "time_start", "time_end", "url", "is_sold_out",
     "description", "venue_id", "venue_name", "category", "keywords",
 )
@@ -37,7 +37,7 @@ _MUTABLE_FIELDS = (
 # All Event model columns that may appear in a scraped event dict.
 _ALLOWED_FIELDS = {
     "venue_id", "name", "type", "category", "keywords", "description",
-    "price_range", "date", "time_start", "time_end", "image_url", "url",
+    "price_range", "date", "date_end", "time_start", "time_end", "image_url", "url",
     "source_url", "is_verified", "is_sold_out", "scraped_at", "kids_friendly",
     "age_restriction",
 }

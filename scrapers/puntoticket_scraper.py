@@ -311,6 +311,9 @@ class PuntoTicketScraper(BaseScraper):
             return None
 
         # ── Image — <img class="img--evento"> ────────────────────────────────
+        # Listing cards use _calugalistado (~200×150px thumbnail).
+        # The higher-res version uses the same filename prefix with _rs suffix
+        # (confirmed: HTTP 200 on all tested events — no detail fetch needed).
         img = card.find("img", class_=re.compile(r"img--evento|event[-_]?img", re.I))
         if not img:
             img = card.find("img")
@@ -325,7 +328,8 @@ class PuntoTicketScraper(BaseScraper):
                 if src.startswith("//"):
                     src = "https:" + src
                 if src.startswith("http"):
-                    event["image_url"] = src
+                    # Upgrade to high-res; keep _calugalistado as-is if no match
+                    event["image_url"] = src.replace("_calugalistado", "_rs")
 
         # ── Venue — <p class="descripcion"><strong>Name</strong> / …</p> ─────
         desc_el = card.find("p", class_=re.compile(r"descripcion|description|lugar|venue", re.I))
@@ -381,6 +385,10 @@ class PuntoTicketScraper(BaseScraper):
             price_range = _parse_price(price_el.get_text(strip=True))
             if price_range:
                 event["price_range"] = price_range
+
+        # ── Sold-out — "AGOTADO" badge in card text ───────────────────────────
+        card_text = card.get_text(" ", strip=True).lower()
+        event["is_sold_out"] = bool(re.search(r"\bagotado\b", card_text))
 
         return event
 
@@ -465,9 +473,14 @@ class PuntoTicketScraper(BaseScraper):
             if prices:
                 result["price_range"] = [min(prices), max(prices)]
 
-        # ── 3. JSON-LD structured data — zero-fragility fallback for price,
-        #        description, and start time when DOM selectors miss ────────────
-        if "price_range" not in result or "description" not in result or "time_start" not in result:
+        # ── 3. JSON-LD structured data ────────────────────────────────────────
+        _needs_ld = (
+            "price_range" not in result
+            or "time_start" not in result
+            or "date" not in result
+            or "image_url" not in result
+        )
+        if _needs_ld:
             for script in soup.find_all("script", {"type": "application/ld+json"}):
                 try:
                     ld = json.loads(script.string or "")
@@ -490,35 +503,61 @@ class PuntoTicketScraper(BaseScraper):
                                     result["price_range"] = [float(low), float(high)]
                                 except (TypeError, ValueError):
                                     pass
-                        # Description
-                        if "description" not in result:
-                            desc = item.get("description")
-                            if desc and isinstance(desc, str) and len(desc.strip()) > 10:
-                                result["description"] = desc.strip()[:1500]
-                        # Start time (ISO 8601: "2026-03-21T20:00:00-03:00")
-                        if "time_start" not in result:
-                            start_dt = item.get("startDate") or ""
-                            t_m = re.search(r"T(\d{2}):(\d{2})", start_dt)
-                            if t_m:
-                                result["time_start"] = f"{t_m.group(1)}:{t_m.group(2)}"
+                        # Start date + time from ISO startDate ("2026-08-09T19:00:00")
+                        start_dt = item.get("startDate") or ""
+                        if start_dt:
+                            if "date" not in result:
+                                iso_m = re.match(r"(\d{4}-\d{2}-\d{2})", start_dt)
+                                if iso_m:
+                                    result["date"] = iso_m.group(1)
+                            if "time_start" not in result:
+                                t_m = re.search(r"T(\d{2}):(\d{2})", start_dt)
+                                if t_m:
+                                    result["time_start"] = f"{t_m.group(1)}:{t_m.group(2)}"
+                        # Image (JSON-LD image is always _rs quality)
+                        if "image_url" not in result:
+                            img_ld = item.get("image")
+                            if isinstance(img_ld, str) and img_ld.startswith("http"):
+                                result["image_url"] = img_ld
+                            elif isinstance(img_ld, list) and img_ld:
+                                result["image_url"] = str(img_ld[0])
                         break  # first matching Event item is enough
                 except (json.JSONDecodeError, TypeError, AttributeError):
                     pass
 
-        # ── 4. Description: div.detail-wrap (narrative block) then meta ───────
-        for el in soup.find_all("div", class_=re.compile(r"detail-wrap")):
-            classes = set(el.get("class", []))
-            # Target the content block (not the ticket-sector table)
-            if "pr-lg-20" in classes or "pt-0_4" in classes:
+        # ── 4. Description ────────────────────────────────────────────────────
+        # JSON-LD description is always boilerplate ("Compra tus entradas para X
+        # en PuntoTicket.com") — ignore it entirely.
+        # Priority: og:description → meta[name=description] → div.detail-wrap
+        # Accept only if longer than 80 chars AND not boilerplate.
+        _BOILERPLATE = "compra tus entradas"
+
+        def _accept_desc(txt: str) -> bool:
+            return bool(txt) and len(txt) > 80 and _BOILERPLATE not in txt.lower()
+
+        if "description" not in result:
+            for meta_attr, meta_name in (
+                ("property", "og:description"),
+                ("name", "description"),
+            ):
+                meta = soup.find("meta", {meta_attr: meta_name})
+                if meta:
+                    txt = (meta.get("content") or "").strip()
+                    if _accept_desc(txt):
+                        result["description"] = txt[:1500]
+                        break
+
+        if "description" not in result:
+            for el in soup.find_all("div", class_=re.compile(r"detail-wrap")):
                 txt = el.get_text(" ", strip=True)
-                if len(txt) > 30:
+                if _accept_desc(txt):
                     result["description"] = txt[:1500]
                     break
 
+        # Explicitly mark description as empty string when no real content found,
+        # so callers can distinguish "fetched but empty" from "not yet fetched".
         if "description" not in result:
-            meta = soup.find("meta", {"name": "description"})
-            if meta and meta.get("content"):
-                result["description"] = meta["content"][:1500]
+            result["description"] = ""
 
         return result
 
@@ -594,14 +633,23 @@ class PuntoTicketScraper(BaseScraper):
                     if hints.get("category"):
                         ev["_locked_category"] = hints["category"]
 
-                    # Fetch detail page when description or price is missing
+                    # Fetch detail page when date, description, or price is missing
                     if ev.get("url") and (
-                        not ev.get("description") or not ev.get("price_range")
+                        not ev.get("date")
+                        or not ev.get("description")
+                        or not ev.get("price_range")
                     ):
                         logger.debug("[%s] Fetching detail for %r", cat_slug, ev.get("name"))
                         detail = self.fetch_event_detail(ev["url"])
                         for key, val in detail.items():
                             ev.setdefault(key, val)
+
+                    # Date is NOT NULL in the DB — skip if still missing after detail fetch
+                    if not ev.get("date"):
+                        logger.debug(
+                            "[%s] No date for %r — skipping", cat_slug, ev.get("name")
+                        )
+                        continue
 
                     all_events.append(ev)
                     page_events += 1
@@ -708,6 +756,18 @@ if __name__ == "__main__":
     scraper = PuntoTicketScraper(max_pages=args.max_pages, debug=args.debug)
     events = scraper.fetch_events()
     if not args.debug:
-        print(f"\nFetched {len(events)} events.")
-        for ev in events[:5]:
-            print(f"  • {ev.get('name')!r}  date={ev.get('date')}  venue={ev.get('venue_name')!r}")
+        from urllib.parse import urlparse as _up
+        print(f"\n── PuntoTicket dry-run: {len(events)} Santiago events ─────────────────")
+        for ev in events[:3]:
+            img_fname = _up(ev.get("image_url") or "").path.split("/")[-1]
+            desc_preview = str(ev.get("description") or "")[:80]
+            print(
+                f"\n  name       : {ev.get('name')!r}\n"
+                f"  date       : {ev.get('date')}\n"
+                f"  time_start : {ev.get('time_start')}\n"
+                f"  venue_name : {ev.get('venue_name')!r}\n"
+                f"  price_range: {ev.get('price_range')}\n"
+                f"  is_sold_out: {ev.get('is_sold_out', False)}\n"
+                f"  image_url  : {img_fname!r}\n"
+                f"  description: {desc_preview!r}"
+            )

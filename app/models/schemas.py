@@ -71,6 +71,12 @@ class VenueBase(BaseModel):
     website_url: Optional[str] = Field(None, max_length=500)
     menu_pdf_url: Optional[str] = Field(None, max_length=500)
     neighborhood_id: Optional[int] = None
+    opening_hours: Optional[str] = None
+    hours_json: Optional[dict] = None
+    permanent_collection: Optional[str] = None
+    ticket_url: Optional[str] = Field(None, max_length=500)
+    instagram_url: Optional[str] = Field(None, max_length=500)
+    admission_info: Optional[str] = Field(None, max_length=255)
 
 
 class VenueCreate(VenueBase):
@@ -93,6 +99,12 @@ class VenueUpdate(BaseModel):
     website_url: Optional[str] = Field(None, max_length=500)
     menu_pdf_url: Optional[str] = Field(None, max_length=500)
     neighborhood_id: Optional[int] = None
+    opening_hours: Optional[str] = None
+    hours_json: Optional[dict] = None
+    permanent_collection: Optional[str] = None
+    ticket_url: Optional[str] = Field(None, max_length=500)
+    instagram_url: Optional[str] = Field(None, max_length=500)
+    admission_info: Optional[str] = Field(None, max_length=255)
 
 
 class Venue(VenueBase):
@@ -119,6 +131,7 @@ class EventBase(BaseModel):
     description: Optional[str] = None
     price_range: Optional[List[float]] = Field(None, min_items=2, max_items=2, description="[min_price, max_price]")
     date: str = Field(..., max_length=50)
+    date_end: Optional[str] = Field(None, max_length=50)
     time_start: Optional[str] = Field(None, max_length=10)
     time_end: Optional[str] = Field(None, max_length=10)
     image_url: Optional[str] = Field(None, max_length=500)
@@ -157,6 +170,7 @@ class EventUpdate(BaseModel):
     description: Optional[str] = None
     price_range: Optional[List[float]] = None
     date: Optional[str] = Field(None, max_length=50)
+    date_end: Optional[str] = Field(None, max_length=50)
     time_start: Optional[str] = Field(None, max_length=10)
     time_end: Optional[str] = Field(None, max_length=10)
     image_url: Optional[str] = Field(None, max_length=500)
