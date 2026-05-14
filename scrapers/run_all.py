@@ -95,8 +95,13 @@ def _run_pipeline(
         _print_sample(processed, verbose=verbose)
         return stats
 
-    # 3. Save (deduplication inside)
+    # 3. Save (deduplication inside) — commit every COMMIT_EVERY events so that
+    # a mid-run connection drop (e.g. Railway proxy reset) only loses the current
+    # uncommitted batch, not the entire scraper's output.
+    COMMIT_EVERY = 200
     now = datetime.now(timezone.utc)
+    pending_commit = 0
+
     for ev in processed:
         ev.setdefault("scraped_at", now)
         ev.setdefault("is_verified", False)
@@ -108,12 +113,52 @@ def _run_pipeline(
             db.flush()
             sp.commit()
             stats[result] += 1
+            pending_commit += 1
         except Exception as exc:
             logger.warning("Save failed for %r: %s", ev.get("name"), exc)
-            sp.rollback()
+            try:
+                sp.rollback()
+            except Exception as sp_exc:
+                # Savepoint rollback failed — the underlying connection is likely
+                # dead (e.g. Railway proxy closed it).  Reset the session so
+                # subsequent events can still be saved via a fresh connection.
+                # Events in the current uncommitted batch are lost.
+                logger.warning(
+                    "Savepoint rollback failed (%s) — resetting session (up to %d "
+                    "pending events may be lost)", sp_exc, pending_commit,
+                )
+                try:
+                    db.rollback()
+                    pending_commit = 0
+                except Exception as rb_exc:
+                    logger.error(
+                        "Session reset failed (%s) — aborting remaining saves for %s",
+                        rb_exc, scraper.name,
+                    )
+                    break
             stats["failed"] += 1
 
-    db.commit()
+        # Periodic commit: persist progress and free the connection from
+        # accumulating a huge open transaction.
+        if pending_commit >= COMMIT_EVERY:
+            try:
+                db.commit()
+                pending_commit = 0
+            except Exception as exc:
+                logger.warning("Batch commit failed: %s — resetting session", exc)
+                try:
+                    db.rollback()
+                except Exception:
+                    break
+                pending_commit = 0
+
+    # Final commit for the last (partial) batch
+    if pending_commit > 0:
+        try:
+            db.commit()
+        except Exception as exc:
+            logger.warning("[%s] Final commit failed: %s", scraper.name, exc)
+
     return stats
 
 
@@ -158,23 +203,23 @@ _SCRAPER_SOURCE_PATTERNS: dict[str, str] = {
 
 
 def _check_stale_scrapers(
-    failed_names: list[str],
     db,
     stale_days: int = 2,
+    failed_names: list[str] | None = None,
 ) -> list[str]:
-    """Return scraper names that have been failing for more than stale_days.
+    """Return scraper names whose last saved event is older than stale_days.
 
-    For each failed scraper, queries MAX(scraped_at) from events where
-    source_url matches the known prefix pattern.  If the last successful
-    save is older than stale_days (or no events exist at all), the scraper
-    is considered persistently stale.
+    Checks ALL scrapers with a known source_url pattern (not just failed ones),
+    so cron-level failures (where the process never runs) are also detected.
+    If failed_names is provided, only those scrapers are checked (legacy mode).
     """
     from sqlalchemy import text  # noqa: PLC0415
 
     stale = []
     cutoff = datetime.now(timezone.utc) - timedelta(days=stale_days)
+    names_to_check = failed_names if failed_names is not None else list(_SCRAPER_SOURCE_PATTERNS.keys())
 
-    for name in failed_names:
+    for name in names_to_check:
         pattern = _SCRAPER_SOURCE_PATTERNS.get(name)
         if not pattern:
             # Unknown pattern — cannot determine staleness; skip
@@ -367,25 +412,31 @@ def main() -> None:
         MuseoScraper(max_events=args.max_events),
     ]
 
-    with Session() as db:
-        for scraper in scrapers:
-            scraper_start = datetime.now(timezone.utc)
-            logger.info("━━━ Running scraper: %s ━━━", scraper.name)
-            try:
+    for scraper in scrapers:
+        scraper_start = datetime.now(timezone.utc)
+        logger.info("━━━ Running scraper: %s ━━━", scraper.name)
+        try:
+            with Session() as db:
+                # Ping before starting to detect stale/dropped connections early
+                try:
+                    from sqlalchemy import text as _text  # noqa: PLC0415
+                    db.execute(_text("SELECT 1"))
+                except Exception:
+                    db.rollback()
                 stats = _run_pipeline(scraper, db, dry_run=args.dry_run, verbose=args.verbose)
-                for key in totals:
-                    totals[key] += stats.get(key, 0)
-                elapsed = (datetime.now(timezone.utc) - scraper_start).seconds
-                logger.info(
-                    "[%s] done in %ds — found=%d created=%d updated=%d failed=%d",
-                    scraper.name, elapsed,
-                    stats.get("found", 0), stats.get("created", 0),
-                    stats.get("updated", 0), stats.get("failed", 0),
-                )
-                scraper_ok.append(scraper.name)
-            except Exception as exc:
-                logger.error("Scraper %s crashed: %s", scraper.name, exc, exc_info=True)
-                scraper_err.append(scraper.name)
+            for key in totals:
+                totals[key] += stats.get(key, 0)
+            elapsed = (datetime.now(timezone.utc) - scraper_start).seconds
+            logger.info(
+                "[%s] done in %ds — found=%d created=%d updated=%d failed=%d",
+                scraper.name, elapsed,
+                stats.get("found", 0), stats.get("created", 0),
+                stats.get("updated", 0), stats.get("failed", 0),
+            )
+            scraper_ok.append(scraper.name)
+        except Exception as exc:
+            logger.error("Scraper %s crashed: %s", scraper.name, exc, exc_info=True)
+            scraper_err.append(scraper.name)
 
     # ── Post-pipeline: TMDB enrichment ───────────────────────────────────────
     if not args.dry_run:
@@ -421,31 +472,24 @@ def main() -> None:
     print("━" * 50)
 
     # ── Stale scraper alert ────────────────────────────────────────────────────
-    # Exit 1 when:
-    #   a) ALL scrapers crashed (existing behaviour), OR
-    #   b) ANY scraper has been failing for > 2 consecutive days (new behaviour).
-    # Railway marks exit-1 cron runs as failed and sends a notification,
-    # alerting the team before days of stale data accumulate unnoticed.
-    if scraper_err and not scraper_ok:
+    # Always check staleness across ALL scrapers, not just those that crashed
+    # in this run. This catches cron-level failures where the process never
+    # starts and scraper_err is always empty.
+    # Exit 1 when any scraper has been stale for > 2 days.
+    logger.info("━━━ Checking for stale scrapers ━━━")
+    with Session() as db:
+        stale = _check_stale_scrapers(db, stale_days=2)
+    if stale:
+        logger.error(
+            "ALERT: %d scraper(s) have been stale for >%d days: %s — exiting with code 1",
+            len(stale), 2, ", ".join(stale),
+        )
+        sys.exit(1)
+    elif scraper_err and not scraper_ok:
         logger.error("All %d scrapers failed — exiting with code 1", len(scraper_err))
         sys.exit(1)
-
-    if scraper_err:
-        logger.info("━━━ Checking for persistently stale scrapers ━━━")
-        with Session() as db:
-            stale = _check_stale_scrapers(scraper_err, db, stale_days=2)
-        if stale:
-            logger.error(
-                "ALERT: %d scraper(s) have been failing for >2 days: %s — exiting with code 1",
-                len(stale),
-                ", ".join(stale),
-            )
-            sys.exit(1)
-        else:
-            logger.info(
-                "Partial failures detected but all failed scrapers saved data recently "
-                "(within 2 days) — treating run as success."
-            )
+    else:
+        logger.info("All scrapers within freshness threshold — run complete.")
 
 
 if __name__ == "__main__":
