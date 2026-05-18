@@ -95,3 +95,42 @@ def save_or_update(event: dict[str, Any], db: Session) -> str:
     db.add(new_event)
     logger.debug("Created event name=%r  source_url=%r", event.get("name"), source_url)
     return "created"
+
+
+def upsert_event_links(event: dict[str, Any], db: Session) -> int:
+    """Upsert any _trailer_url from the event dict as an EventCommunityLink.
+
+    Looks up the saved event row by source_url, then inserts a 'youtube'
+    community link if one doesn't already exist.  Must be called *after*
+    save_or_update() and db.commit() so the event row has a stable ID.
+
+    Returns the number of new links created (0 or 1).
+    """
+    from app.db.models import Event, EventCommunityLink  # noqa: PLC0415
+
+    trailer_url = event.get("_trailer_url")
+    if not trailer_url:
+        return 0
+    source_url = event.get("source_url")
+    if not source_url:
+        return 0
+
+    event_row = (
+        db.query(Event).filter(Event.source_url == source_url).first()
+    )
+    if not event_row:
+        return 0
+
+    exists = (
+        db.query(EventCommunityLink)
+        .filter(
+            EventCommunityLink.event_id == event_row.id,
+            EventCommunityLink.platform == "youtube",
+        )
+        .first()
+    )
+    if exists:
+        return 0
+
+    db.add(EventCommunityLink(event_id=event_row.id, platform="youtube", url=trailer_url))
+    return 1

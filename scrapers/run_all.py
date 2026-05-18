@@ -159,6 +159,25 @@ def _run_pipeline(
         except Exception as exc:
             logger.warning("[%s] Final commit failed: %s", scraper.name, exc)
 
+    # Post-save: upsert community links derived from event dict fields
+    # (e.g. _trailer_url populated by CineplanetScraper from the cinema API).
+    # Must run after the save loop so all event rows have stable DB IDs.
+    events_with_links = [ev for ev in processed if ev.get("_trailer_url")]
+    if events_with_links:
+        try:
+            link_count = sum(
+                deduplicator.upsert_event_links(ev, db) for ev in events_with_links
+            )
+            if link_count:
+                db.commit()
+                logger.info("[%s] Added %d trailer link(s)", scraper.name, link_count)
+        except Exception as exc:
+            logger.warning("[%s] Community link upsert failed: %s", scraper.name, exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
     return stats
 
 
