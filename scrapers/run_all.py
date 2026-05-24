@@ -58,6 +58,7 @@ def _run_pipeline(
     db,
     dry_run: bool = False,
     verbose: bool = False,
+    Session=None,
 ) -> dict[str, int]:
     """Run fetch → classify → enrich → (optionally) save for one scraper."""
     stats = {"found": 0, "created": 0, "updated": 0, "skipped": 0, "failed": 0}
@@ -95,69 +96,56 @@ def _run_pipeline(
         _print_sample(processed, verbose=verbose)
         return stats
 
-    # 3. Save (deduplication inside) — commit every COMMIT_EVERY events so that
-    # a mid-run connection drop (e.g. Railway proxy reset) only loses the current
-    # uncommitted batch, not the entire scraper's output.
+    # 3. Save — use a fresh DB session for each batch of COMMIT_EVERY events.
+    # This ensures a connection drop (e.g. Railway proxy reset) only loses the
+    # current batch; all previously committed batches are already persisted.
+    # A savepoint per event further limits row-level failure blast radius.
     COMMIT_EVERY = 200
     now = datetime.now(timezone.utc)
-    pending_commit = 0
 
     for ev in processed:
         ev.setdefault("scraped_at", now)
         ev.setdefault("is_verified", False)
+
+    for batch_start in range(0, len(processed), COMMIT_EVERY):
+        batch = processed[batch_start : batch_start + COMMIT_EVERY]
         try:
-            # Use a savepoint so a per-event failure only rolls back that
-            # event, not all previously successful inserts in the batch.
-            sp = db.begin_nested()
-            result = deduplicator.save_or_update(ev, db)
-            db.flush()
-            sp.commit()
-            stats[result] += 1
-            pending_commit += 1
-        except Exception as exc:
-            logger.warning("Save failed for %r: %s", ev.get("name"), exc)
-            try:
-                sp.rollback()
-            except Exception as sp_exc:
-                # Savepoint rollback failed — the underlying connection is likely
-                # dead (e.g. Railway proxy closed it).  Reset the session so
-                # subsequent events can still be saved via a fresh connection.
-                # Events in the current uncommitted batch are lost.
-                logger.warning(
-                    "Savepoint rollback failed (%s) — resetting session (up to %d "
-                    "pending events may be lost)", sp_exc, pending_commit,
+            with Session() as save_db:
+                for ev in batch:
+                    try:
+                        sp = save_db.begin_nested()
+                        result = deduplicator.save_or_update(ev, save_db)
+                        save_db.flush()
+                        sp.commit()
+                        stats[result] += 1
+                    except Exception as exc:
+                        logger.warning("Save failed for %r: %s", ev.get("name"), exc)
+                        try:
+                            sp.rollback()
+                        except Exception as sp_exc:
+                            # Connection is dead — abandon this batch entirely.
+                            # The with-block exit will close the broken session.
+                            logger.warning(
+                                "Savepoint rollback failed (%s) — abandoning batch "
+                                "%d–%d for %s",
+                                sp_exc,
+                                batch_start + 1,
+                                batch_start + len(batch),
+                                scraper.name,
+                            )
+                            stats["failed"] += 1
+                            break
+                        stats["failed"] += 1
+                save_db.commit()
+                logger.debug(
+                    "[%s] Batch %d–%d committed",
+                    scraper.name, batch_start + 1, batch_start + len(batch),
                 )
-                try:
-                    db.rollback()
-                    pending_commit = 0
-                except Exception as rb_exc:
-                    logger.error(
-                        "Session reset failed (%s) — aborting remaining saves for %s",
-                        rb_exc, scraper.name,
-                    )
-                    break
-            stats["failed"] += 1
-
-        # Periodic commit: persist progress and free the connection from
-        # accumulating a huge open transaction.
-        if pending_commit >= COMMIT_EVERY:
-            try:
-                db.commit()
-                pending_commit = 0
-            except Exception as exc:
-                logger.warning("Batch commit failed: %s — resetting session", exc)
-                try:
-                    db.rollback()
-                except Exception:
-                    break
-                pending_commit = 0
-
-    # Final commit for the last (partial) batch
-    if pending_commit > 0:
-        try:
-            db.commit()
         except Exception as exc:
-            logger.warning("[%s] Final commit failed: %s", scraper.name, exc)
+            logger.warning(
+                "[%s] Batch session failed (events %d–%d): %s",
+                scraper.name, batch_start + 1, batch_start + len(batch), exc,
+            )
 
     # Post-save: upsert community links derived from event dict fields
     # (e.g. _trailer_url populated by CineplanetScraper from the cinema API).
@@ -165,18 +153,16 @@ def _run_pipeline(
     events_with_links = [ev for ev in processed if ev.get("_trailer_url")]
     if events_with_links:
         try:
-            link_count = sum(
-                deduplicator.upsert_event_links(ev, db) for ev in events_with_links
-            )
-            if link_count:
-                db.commit()
-                logger.info("[%s] Added %d trailer link(s)", scraper.name, link_count)
+            with Session() as link_db:
+                link_count = sum(
+                    deduplicator.upsert_event_links(ev, link_db)
+                    for ev in events_with_links
+                )
+                if link_count:
+                    link_db.commit()
+                    logger.info("[%s] Added %d trailer link(s)", scraper.name, link_count)
         except Exception as exc:
             logger.warning("[%s] Community link upsert failed: %s", scraper.name, exc)
-            try:
-                db.rollback()
-            except Exception:
-                pass
 
     return stats
 
@@ -442,7 +428,7 @@ def main() -> None:
                     db.execute(_text("SELECT 1"))
                 except Exception:
                     db.rollback()
-                stats = _run_pipeline(scraper, db, dry_run=args.dry_run, verbose=args.verbose)
+                stats = _run_pipeline(scraper, db, dry_run=args.dry_run, verbose=args.verbose, Session=Session)
             for key in totals:
                 totals[key] += stats.get(key, 0)
             elapsed = (datetime.now(timezone.utc) - scraper_start).seconds

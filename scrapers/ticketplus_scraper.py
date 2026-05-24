@@ -51,6 +51,7 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import time
 from datetime import datetime
@@ -71,6 +72,21 @@ from scrapers.puntoticket_scraper import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── Scraper-level timeout ──────────────────────────────────────────────────────
+
+FETCH_TIMEOUT_SECONDS = 300  # 5 minutes — abort fetch_events() if it hangs this long
+
+
+class _FetchTimeout(Exception):
+    """Raised by SIGALRM handler when fetch_events() exceeds FETCH_TIMEOUT_SECONDS."""
+
+
+def _alarm_handler(signum: int, frame: object) -> None:
+    raise _FetchTimeout(
+        f"TicketPlus fetch_events exceeded {FETCH_TIMEOUT_SECONDS}s limit"
+    )
+
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -253,7 +269,7 @@ class TicketPlusScraper(BaseScraper):
 
     def _get_soup(self, url: str) -> BeautifulSoup | None:
         try:
-            resp = self.session.get(url, timeout=20)
+            resp = self.session.get(url, timeout=30)
             resp.raise_for_status()
             return BeautifulSoup(resp.text, "lxml")
         except requests.RequestException as exc:
@@ -829,7 +845,7 @@ class TicketPlusScraper(BaseScraper):
         logger.info("[ticketplus] Scraping search.json %r — %s", source_label, api_url)
 
         try:
-            resp = self.session.get(api_url, timeout=20)
+            resp = self.session.get(api_url, timeout=30)
             resp.raise_for_status()
             results = resp.json().get("results", [])
         except Exception as exc:
@@ -1045,49 +1061,62 @@ class TicketPlusScraper(BaseScraper):
           3. GAM subdomain  — /events/search.json API, venue forced to "GAM"
 
         Returns a flat list of event dicts ready for classifier + enricher.
+        A SIGALRM fires after FETCH_TIMEOUT_SECONDS (5 min) to prevent hangs.
         """
         all_events: list[dict[str, Any]] = []
         seen_urls: set[str] = set()
 
-        # ── 1. Company pages (explicit venue_name override) ───────────────────
-        for slug, venue_name, cat_hint, lock in COMPANY_CONFIG:
-            if self.max_events and len(all_events) >= self.max_events:
-                break
-            self._scrape_company_page(
-                company_slug=slug,
-                source_label=f"company:{slug}",
-                venue_name_override=venue_name,
-                cat_hint=cat_hint,
-                lock=lock,
-                all_events=all_events,
-                seen_urls=seen_urls,
-            )
+        old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
+        signal.alarm(FETCH_TIMEOUT_SECONDS)
+        try:
+            # ── 1. Company pages (explicit venue_name override) ───────────────────
+            for slug, venue_name, cat_hint, lock in COMPANY_CONFIG:
+                if self.max_events and len(all_events) >= self.max_events:
+                    break
+                self._scrape_company_page(
+                    company_slug=slug,
+                    source_label=f"company:{slug}",
+                    venue_name_override=venue_name,
+                    cat_hint=cat_hint,
+                    lock=lock,
+                    all_events=all_events,
+                    seen_urls=seen_urls,
+                )
 
-        # ── 2. /states/region-metropolitana — RM catch-all ───────────────────
-        if STATES_RM_URL and not (self.max_events and len(all_events) >= self.max_events):
-            self._scrape_company_page(
-                company_slug="",          # unused — start_url overrides it
-                source_label="states-rm",
-                venue_name_override=None, # enricher resolves from JSON-LD
-                cat_hint=None,
-                lock=False,
-                all_events=all_events,
-                seen_urls=seen_urls,
-                start_url=STATES_RM_URL,
-                skip_geo_filter=True,     # /states/region-metropolitana is already RM-scoped
-            )
+            # ── 2. /states/region-metropolitana — RM catch-all ───────────────────
+            if STATES_RM_URL and not (self.max_events and len(all_events) >= self.max_events):
+                self._scrape_company_page(
+                    company_slug="",          # unused — start_url overrides it
+                    source_label="states-rm",
+                    venue_name_override=None, # enricher resolves from JSON-LD
+                    cat_hint=None,
+                    lock=False,
+                    all_events=all_events,
+                    seen_urls=seen_urls,
+                    start_url=STATES_RM_URL,
+                    skip_geo_filter=True,     # /states/region-metropolitana is already RM-scoped
+                )
 
-        # ── 3. GAM subdomain — /events/search.json API ────────────────────────
-        if GAM_SUBDOMAIN and not (self.max_events and len(all_events) >= self.max_events):
-            self._scrape_from_search_json(
-                base_url=GAM_SUBDOMAIN,
-                source_label="gam-subdomain",
-                venue_name_override=GAM_VENUE_NAME,
-                cat_hint=None,
-                lock=False,
-                all_events=all_events,
-                seen_urls=seen_urls,
+            # ── 3. GAM subdomain — /events/search.json API ────────────────────────
+            if GAM_SUBDOMAIN and not (self.max_events and len(all_events) >= self.max_events):
+                self._scrape_from_search_json(
+                    base_url=GAM_SUBDOMAIN,
+                    source_label="gam-subdomain",
+                    venue_name_override=GAM_VENUE_NAME,
+                    cat_hint=None,
+                    lock=False,
+                    all_events=all_events,
+                    seen_urls=seen_urls,
+                )
+
+        except _FetchTimeout:
+            logger.warning(
+                "[ticketplus] fetch_events timed out after %ds — returning %d events "
+                "collected so far", FETCH_TIMEOUT_SECONDS, len(all_events),
             )
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
         logger.info("[ticketplus] Total events collected: %d", len(all_events))
         return all_events
