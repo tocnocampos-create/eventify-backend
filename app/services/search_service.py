@@ -3,7 +3,7 @@ import unicodedata
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Dict, List, Optional, Any
-from sqlalchemy import cast, or_, and_, func, String
+from sqlalchemy import cast, or_, and_, func, String, case
 from sqlalchemy.dialects.postgresql import ARRAY as PgARRAY
 from sqlalchemy.orm import Session, Query
 from app.db.models import Venue, Event
@@ -329,6 +329,18 @@ class SearchService:
                 )
             venue_query = self._apply_venue_filters(venue_query, filters)
 
+        # When a text query is present, sort venues by match quality so the
+        # closest match (exact name) always appears first in the dropdown.
+        if filters.q is not None:
+            q_norm = _strip_accents(filters.q.lower())
+            priority = case(
+                (func.unaccent(func.lower(Venue.name)) == q_norm, 0),
+                (func.unaccent(func.lower(Venue.name)).ilike(f"{q_norm}%"), 1),
+                (func.unaccent(func.lower(Venue.name)).ilike(f"%{q_norm}%"), 2),
+                else_=3,
+            )
+            venue_query = venue_query.order_by(priority, Venue.name)
+
         return venue_query
 
     def _restrict_venues_to_matching_events(
@@ -426,10 +438,17 @@ class SearchService:
             return []
 
         venue_ids = [venue.id for venue in venues]
+        event_limit = min(filters.limit, 50)  # never return more than 50 events
 
         if not has_event_filters:
-            # No event filters: return all events for these venues
-            return self.db.query(Event).filter(Event.venue_id.in_(venue_ids)).all()
+            # No event filters: return upcoming events for these venues, date-sorted
+            return (
+                self.db.query(Event)
+                .filter(Event.venue_id.in_(venue_ids))
+                .order_by(Event.date)
+                .limit(event_limit)
+                .all()
+            )
 
         # Apply event filters WITHOUT the text query (q).
         # Venues may have been found by name match (e.g. "Movistar Arena" when q="movistar").
@@ -438,4 +457,10 @@ class SearchService:
         event_query = self.db.query(Event)
         filters_no_q = replace(filters, q=None) if filters.q else filters
         event_query = self._apply_event_filters(event_query, filters_no_q)
-        return event_query.filter(Event.venue_id.in_(venue_ids)).all()
+        return (
+            event_query
+            .filter(Event.venue_id.in_(venue_ids))
+            .order_by(Event.date)
+            .limit(event_limit)
+            .all()
+        )
