@@ -240,14 +240,12 @@ def fetch_tmdb_metadata(title: str) -> dict[str, Any] | None:
 # ── DB apply ───────────────────────────────────────────────────────────────────
 
 def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
-    """Enrich all Cine events in the DB with TMDB metadata.
+    """Enrich Cine events in the DB with TMDB metadata.
 
-    For each unique base movie title (format suffix stripped) among events
-    with category='Cine':
-      - Fetches TMDB metadata (cached per title so each film hits the API once).
-      - Sets events.description if currently empty.
-      - Upserts an EventCommunityLink row with platform='youtube' when a
-        trailer URL is found and one does not already exist for that event.
+    Only processes events that are missing at least one of: description,
+    image_url, or a YouTube community link.  This keeps each run O(unenriched)
+    rather than O(all cinema events), preventing Railway cron timeouts as the
+    DB grows.
 
     Commits the changes and returns stats:
         {"enriched": N, "trailers_added": N, "not_found": N}
@@ -256,12 +254,33 @@ def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
 
     stats = {"enriched": 0, "trailers_added": 0, "not_found": 0}
 
+    # One bulk query to load all event IDs that already have a YouTube link.
+    # Used below for O(1) duplicate checks, replacing a per-event N+1 query.
+    existing_yt_ids: set[int] = set(
+        row[0] for row in
+        db.query(EventCommunityLink.event_id)
+        .filter(EventCommunityLink.platform == "youtube")
+        .all()
+    )
+
+    # Only fetch events that still need at least one enrichment field.
     cinema_events: list[Any] = (
-        db.query(Event).filter(Event.category == "Cine").all()
+        db.query(Event)
+        .filter(Event.category == "Cine")
+        .filter(
+            Event.description.is_(None)
+            | (Event.description == "")
+            | Event.image_url.is_(None)
+            | ~Event.id.in_(
+                db.query(EventCommunityLink.event_id)
+                .filter(EventCommunityLink.platform == "youtube")
+            )
+        )
+        .all()
     )
 
     if not cinema_events:
-        logger.info("[tmdb] No Cine events found in DB — nothing to enrich")
+        logger.info("[tmdb] All Cine events already fully enriched — nothing to do")
         return stats
 
     # Group by base title so we fetch TMDB once per film
@@ -273,7 +292,7 @@ def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
         title_groups.setdefault(base, []).append(ev)
 
     logger.info(
-        "[tmdb] %d unique movie titles across %d Cine events",
+        "[tmdb] %d unique movie titles across %d Cine events needing enrichment",
         len(title_groups), len(cinema_events),
     )
 
@@ -292,36 +311,27 @@ def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
 
         description = _build_description(meta)
         trailer_url = meta.get("trailer_url")
-
         poster_url = meta.get("poster_url")
 
         for ev in group:
             changed = False
 
-            if description:
+            if description and ev.description != description:
                 ev.description = description
                 changed = True
 
-            if poster_url:
+            if poster_url and ev.image_url != poster_url:
                 ev.image_url = poster_url
                 changed = True
 
-            if trailer_url:
-                existing = (
-                    db.query(EventCommunityLink)
-                    .filter(
-                        EventCommunityLink.event_id == ev.id,
-                        EventCommunityLink.platform == "youtube",
-                    )
-                    .first()
-                )
-                if not existing:
-                    db.add(EventCommunityLink(
-                        event_id=ev.id,
-                        platform="youtube",
-                        url=trailer_url,
-                    ))
-                    stats["trailers_added"] += 1
+            if trailer_url and ev.id not in existing_yt_ids:
+                db.add(EventCommunityLink(
+                    event_id=ev.id,
+                    platform="youtube",
+                    url=trailer_url,
+                ))
+                existing_yt_ids.add(ev.id)
+                stats["trailers_added"] += 1
 
             if changed:
                 db.add(ev)
