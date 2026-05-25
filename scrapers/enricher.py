@@ -38,6 +38,25 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+# ── Known venue-name overrides ────────────────────────────────────────────────
+# Applied to the scraped venue_name BEFORE any DB matching.  Maps lowercase
+# scraped variants (with or without accents) to the canonical display name
+# stored in the DB.  Add entries here when a scraper consistently produces a
+# name that differs from the canonical DB name by more than accent alone.
+
+VENUE_NAME_OVERRIDES: dict[str, str] = {
+    "bar de rené":  "Bar de René",
+    "bar de rene":  "Bar de René",
+    "scd egaña":    "Sala SCD Plaza Egaña",
+    "scd egana":    "Sala SCD Plaza Egaña",
+}
+
+
+def apply_overrides(name: str) -> str:
+    """Return the canonical DB name for well-known scraper name variants."""
+    return VENUE_NAME_OVERRIDES.get(name.lower().strip(), name)
+
+
 # ── Venue-type prefix stripping ───────────────────────────────────────────────
 
 # Common venue-type prefixes PuntoTicket (and seed data) prepend to venue names.
@@ -154,32 +173,48 @@ def _candidates_for_word(word: str, db: Session, Venue: Any) -> list[Any]:
     )
 
 
+def _candidates_for_stripped_word(word: str, db: Session, Venue: Any) -> list[Any]:
+    """Return DB venues whose unaccent(lower(name)) contains *word*.
+
+    Uses PostgreSQL's unaccent() so 'rene' matches 'René', 'caupolican'
+    matches 'Caupolicán', etc.  Falls back to _candidates_for_word when
+    the DB result is empty (guards against missing unaccent extension).
+    """
+    try:
+        return (
+            db.query(Venue)
+            .filter(func.unaccent(func.lower(Venue.name)).contains(word.lower()))
+            .all()
+        )
+    except Exception:
+        return _candidates_for_word(word, db, Venue)
+
+
 def _near_exact_match(name: str, db: Session, Venue: Any) -> Any | None:
     """Check for a near-exact match using accent-stripped comparison.
 
     Loads all venues whose accent-stripped name matches the accent-stripped
     scraped name. Returns the first match, or None.
 
-    This prevents creating "Teatro Caupolican" alongside "Teatro Caupolicán".
+    This prevents creating "Teatro Caupolican" alongside "Teatro Caupolicán"
+    and "Bar de Rene" alongside "Bar de René".
     """
     stripped_target = _strip_accents(name.lower())
 
-    # Use first significant word (5+ chars) to narrow the candidate set
+    # Use first significant word (4+ chars) from the stripped name to narrow
+    # the candidate set.  Use accent-insensitive DB search so "rene" finds
+    # DB rows containing "rené".
     first_word = next(
-        (w for w in stripped_target.split() if len(w) >= 5), ""
+        (w for w in stripped_target.split() if len(w) >= 4), ""
     )
     if not first_word:
         return None
 
-    # DB query on first word (accent-insensitive via unaccent would be ideal,
-    # but we keep it DB-agnostic by filtering in Python after a broad query)
-    candidates = _candidates_for_word(first_word, db, Venue)
-    # Also try without first word in case accents differ there
+    candidates = _candidates_for_stripped_word(first_word, db, Venue)
     if not candidates:
-        plain_words = _strip_accents(name.lower()).split()
-        for w in plain_words:
-            if len(w) >= 5:
-                candidates = _candidates_for_word(w, db, Venue)
+        for w in stripped_target.split():
+            if len(w) >= 4:
+                candidates = _candidates_for_stripped_word(w, db, Venue)
                 if candidates:
                     break
 
@@ -267,7 +302,7 @@ def enrich(event: dict[str, Any], db: Session) -> dict[str, Any]:
             event["venue_type"] = venue.venue_type
         return event
 
-    venue_name: str = (event.get("venue_name") or "").strip()
+    venue_name: str = apply_overrides((event.get("venue_name") or "").strip())
     if not venue_name:
         return event
 
@@ -343,11 +378,12 @@ def enrich(event: dict[str, Any], db: Session) -> dict[str, Any]:
                 break
 
     # ── 6. Accent-stripped near-exact match ────────────────────────────────────
+    # Uses unaccent-aware DB search so "rene" finds "René", etc.
     if venue is None:
         stripped_scraped = _strip_accents(venue_name_lower)
-        first_word = next((w for w in venue_name_lower.split() if len(w) >= 4), "")
+        first_word = next((w for w in stripped_scraped.split() if len(w) >= 4), "")
         if first_word:
-            for candidate in _candidates_for_word(first_word, db, Venue):
+            for candidate in _candidates_for_stripped_word(first_word, db, Venue):
                 if _strip_accents(candidate.name.lower()) == stripped_scraped:
                     venue = candidate
                     break
