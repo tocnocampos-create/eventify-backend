@@ -167,7 +167,7 @@ KEYWORD_RULES: dict[str, list[str]] = {
         "drama", "tragicomedia", "monólogo", "danza", "ballet",
     ],
     "Comedia": [
-        "comedia", "stand up", "stand-up", "humor",
+        "comedia", "stand up", "stand-up", "stan up", "humor",
         "comediante", "show de humor", "comedia en vivo",
         "improvisación", "impro", "sketch", "comedy",
         "open mic", "humorada", "cómico", "cómica",
@@ -272,6 +272,10 @@ VENUE_TYPE_FALLBACK: dict[str, tuple[str, str | None]] = {
     "bar":               ("Vida Nocturna", "Vida Nocturna"),
     "arena":             ("Música",        None),
     "sala de concierto": ("Música",        None),
+    # FIX 8: missing venue types that produced 162 NULL-category events
+    "teatro":            ("Teatro",        None),
+    "comedia":           ("Comedia",       "Stand Up"),
+    "espacio cultural":  ("Música",        None),
     # FIX 7: outdoor venue types
     "parque":            ("Al Aire Libre", "Aire Libre"),
     "cerro":             ("Al Aire Libre", "Aire Libre"),
@@ -584,6 +588,13 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
             category = fallback[0]
             if etype is None and fallback[1] is not None:
                 etype = fallback[1]
+
+    # 4b. Last-resort: Cine venues are already locked; for everything else,
+    # default to Música rather than leaving category NULL.  Scraper sources
+    # (Passline, Evently, etc.) only surface cultural events, so Música is a
+    # safe fallback when no keyword or venue-type rule matched.
+    if category is None and not locked_category and vt_lower not in _CINE_VENUE_TYPES:
+        category = "Música"
 
     # 5. Scraper category hint (last resort)
     if category is None and category_hint and not locked_category:
