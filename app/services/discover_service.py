@@ -1,5 +1,7 @@
 """Discover feed service — trending, today, weekly, nearby, personalized."""
 import math
+import re
+import unicodedata
 from datetime import date, timedelta
 from typing import List, Optional, Set
 
@@ -18,6 +20,32 @@ from app.db.models import (
 
 class DiscoverService:
     """Builds the discover feed with multiple curated sections."""
+
+    # Premium non-cinema venues: Arenas, top Teatros, main Salas de Concierto
+    # Note: Teatro Mori (278, 541-543) is excluded — it's a cinema that shows
+    # film screenings, so it lives in _CINEMA_VENUE_IDS instead.
+    _PREMIUM_VENUE_IDS: List[int] = [
+        # Arenas / Estadios
+        70, 71, 72, 73, 74, 75, 76, 41, 427, 539, 292, 468,
+        # Top Teatros (theatrical productions, not cinemas)
+        53, 51, 57, 55, 54, 60, 63, 62, 420, 58, 65, 61,
+        # Main Salas de Concierto
+        44, 460, 47, 48, 49, 289, 50, 474,
+    ]
+
+    # Cinema venues (venue_type=Cine) + Teatro Mori (venue_type=Teatro but
+    # screens films) — used for deduplication by film title, max 5 results.
+    _CINEMA_VENUE_IDS: List[int] = [
+        # venue_type = Cine
+        110, 111, 112, 113, 114, 115, 116, 117, 118, 119,
+        120, 121, 122, 124, 125, 126, 127, 128, 129, 130,
+        131, 132, 133, 134, 135, 136, 137, 138, 139, 140,
+        293, 294, 295, 296, 297, 298, 299, 300, 301, 302,
+        303, 305, 306, 307, 308, 309, 310, 311, 312, 317,
+        473, 557, 558,
+        # Teatro Mori (screens films despite venue_type=Teatro)
+        278, 541, 542, 543,
+    ]
 
     @staticmethod
     def get_discover_feed(
@@ -55,46 +83,100 @@ class DiscoverService:
 
     @staticmethod
     def _get_trending_events(
-        db: Session, today_str: str, city: str, limit: int = 10
+        db: Session, today_str: str, city: str, limit: int = 20
     ) -> List[Event]:
-        saves_sub = (
-            db.query(
-                UserSavedEvent.event_id,
-                func.count().label("saves_count"),
-            )
-            .group_by(UserSavedEvent.event_id)
-            .subquery()
-        )
-        reviews_sub = (
-            db.query(
-                Review.event_id,
-                func.count().label("review_count"),
-                func.coalesce(func.avg(Review.rating), 0).label("avg_rating"),
-            )
-            .filter(Review.event_id.isnot(None))
-            .group_by(Review.event_id)
-            .subquery()
-        )
+        """
+        Return high-profile upcoming events at premium venues.
 
-        score = (
-            func.coalesce(saves_sub.c.saves_count, 0) * 3
-            + func.coalesce(reviews_sub.c.review_count, 0) * 2
-            + func.coalesce(reviews_sub.c.avg_rating, 0) * 1.5
-        ).label("score")
+        Strategy:
+        1. Events at premium non-cinema venues (next 90 days), soonest first.
+        2. Cinema releases at any cinema venue (next 30 days), deduplicated by
+           film name so each film appears only once, max 5.
+        3. Fallback: if fewer than 5 results, expand to all venue_type in
+           (Arena, Teatro, Sala de Concierto) filtered by city.
+        """
+        horizon_30 = (date.today() + timedelta(days=30)).isoformat()
+        horizon_90 = (date.today() + timedelta(days=90)).isoformat()
 
-        query = (
+        # 1. Premium non-cinema events — cap at limit-5 to leave room for cinema
+        premium_events: List[Event] = (
             db.query(Event)
             .options(joinedload(Event.venue))
-            .outerjoin(saves_sub, Event.id == saves_sub.c.event_id)
-            .outerjoin(reviews_sub, Event.id == reviews_sub.c.event_id)
-            .filter(Event.date >= today_str)
+            .filter(
+                Event.venue_id.in_(DiscoverService._PREMIUM_VENUE_IDS),
+                Event.date >= today_str,
+                Event.date <= horizon_90,
+            )
+            .order_by(Event.date, Event.time_start)
+            .limit(max(limit - 5, 10))
+            .all()
         )
-        if city:
-            query = query.join(Venue, Event.venue_id == Venue.id).filter(
-                Venue.city == city
+
+        # 2. Cinema releases — one entry per film title, max 5
+        cinema_raw: List[Event] = (
+            db.query(Event)
+            .options(joinedload(Event.venue))
+            .filter(
+                Event.venue_id.in_(DiscoverService._CINEMA_VENUE_IDS),
+                Event.date >= today_str,
+                Event.date <= horizon_30,
+            )
+            .order_by(Event.name, Event.date)
+            .all()
+        )
+        # Normalize: strip format qualifiers in parentheses and combining
+        # diacriticals so "BACKROOMS (4DX SUBT)" and "DESPUÉS/DESPUES" collapse.
+        def _film_key(name: str) -> str:
+            base = re.sub(r'\s*\([^)]*\)', '', name or '').strip().lower()
+            return "".join(
+                c for c in unicodedata.normalize("NFD", base)
+                if unicodedata.category(c) != "Mn"
             )
 
-        return query.order_by(score.desc()).limit(limit).all()
+        seen_names: Set[str] = set()
+        cinema_events: List[Event] = []
+        for ev in cinema_raw:
+            key = _film_key(ev.name or "")
+            if key and key not in seen_names:
+                seen_names.add(key)
+                cinema_events.append(ev)
+            if len(cinema_events) >= 5:
+                break
+
+        # 3. Combine, deduplicate by event ID
+        seen_ids: Set[int] = set()
+        result: List[Event] = []
+        for ev in premium_events:
+            if ev.id not in seen_ids:
+                seen_ids.add(ev.id)
+                result.append(ev)
+        for ev in cinema_events:
+            if ev.id not in seen_ids:
+                seen_ids.add(ev.id)
+                result.append(ev)
+
+        # 4. Fallback: expand to all premium venue_types if results are sparse
+        if len(result) < 5:
+            fallback_query = (
+                db.query(Event)
+                .options(joinedload(Event.venue))
+                .join(Venue, Event.venue_id == Venue.id)
+                .filter(
+                    Venue.venue_type.in_(["Arena", "Teatro", "Sala de Concierto"]),
+                    Event.date >= today_str,
+                    Event.date <= horizon_90,
+                )
+                .order_by(Event.date, Event.time_start)
+                .limit(limit)
+            )
+            if city:
+                fallback_query = fallback_query.filter(Venue.city == city)
+            for ev in fallback_query.all():
+                if ev.id not in seen_ids:
+                    seen_ids.add(ev.id)
+                    result.append(ev)
+
+        return result[:limit]
 
     # ── Today ─────────────────────────────────────────────────────
 
