@@ -17,10 +17,9 @@ Match strategy (in order):
      a substring of the scraped name (handles prefix mismatches).
   6. Accent-stripped fallback: compare names with accents removed so
      "Teatro Caupolican" matches DB row "Teatro Caupolicán".
-  7. Auto-create: if all 6 steps fail, insert a new Venue row with the
-     scraped name, venue_type inferred from the event category, and
-     coordinates defaulting to Santiago center. A near-exact normalized
-     check runs first to avoid creating near-duplicates.
+  7. Accent-stripped near-exact (final dedup guard): runs a full accent-stripped
+     comparison across the DB. If still no match, the event saves with
+     venue_id=NULL — auto-create is permanently disabled.
 """
 from __future__ import annotations
 
@@ -49,6 +48,22 @@ VENUE_NAME_OVERRIDES: dict[str, str] = {
     "bar de rene":  "Bar de René",
     "scd egaña":    "Sala SCD Plaza Egaña",
     "scd egana":    "Sala SCD Plaza Egaña",
+    # Sala Master variants
+    "salamaster":   "Sala Master",
+    "sala master":  "Sala Master",
+    # Museo Nacional Bellas Artes variants
+    "museo nacional de bellas artes": "Museo Nacional Bellas Artes",
+    "museo bellas artes":             "Museo Nacional Bellas Artes",
+    "mnba":                           "Museo Nacional Bellas Artes",
+    # Estadio Bicentenario La Florida
+    "estadio bicentenario de la florida": "Estadio Bicentenario La Florida",
+    # Auditorio UAC variant with street number
+    "auditorio 641, universidad autónoma de chile": "Auditorio Universidad Autónoma de Chile",
+    "auditorio 641, universidad autonoma de chile": "Auditorio Universidad Autónoma de Chile",
+    # Granja Educativa spelling variant
+    "ex restaurant granja educativa": "Ex Restaurante Granja Educativa",
+    # Estadio Barnechea
+    "estadio barnechea": "Estadio Lo Barnechea",
 }
 
 
@@ -388,11 +403,10 @@ def enrich(event: dict[str, Any], db: Session) -> dict[str, Any]:
                     venue = candidate
                     break
 
-    # ── 7. Auto-create ─────────────────────────────────────────────────────────
+    # ── 7. Accent-stripped near-exact (final dedup guard) ─────────────────────
+    # Auto-create is intentionally disabled: unknown venues save with venue_id=NULL
+    # and venue_name_raw only. No new venue profiles are created automatically.
     if venue is None:
-        # Final dedup check: accent-stripped near-exact across the full table
-        # (prevents duplicates caused by accentuation differences not caught
-        # by step 6 because the first-word query had zero candidates)
         near = _near_exact_match(venue_name, db, Venue)
         if near is not None:
             logger.debug(
@@ -401,13 +415,10 @@ def enrich(event: dict[str, Any], db: Session) -> dict[str, Any]:
             )
             venue = near
         else:
-            try:
-                venue = _create_venue(venue_name, event, db, Venue)
-            except Exception as exc:
-                logger.warning(
-                    "Auto-create venue failed for %r: %s — saving without venue_id",
-                    venue_name, exc,
-                )
+            logger.info(
+                "No venue match for %r — saving without venue_id (auto-create disabled)",
+                venue_name,
+            )
 
     # ── Result ────────────────────────────────────────────────────────────────
     if venue is not None:
