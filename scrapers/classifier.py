@@ -412,6 +412,12 @@ _RULE_TO_TYPE: dict[str, str | None] = {
 # ── FIX 1: Cine venue constraint ──────────────────────────────────────────────
 _CINE_VENUE_TYPES: frozenset[str] = frozenset(["cine", "cineteca"])
 
+# Cinema scraper source prefixes — events from these are always Cine.
+# The scrapers don't forward venue_type into the event dict at classification
+# time, so the VENUE_TYPE_RULES hard signal never fires and the Música
+# last-resort fallback wins. Source prefix is the only reliable signal.
+_CINEMA_SOURCES: frozenset[str] = frozenset(["cinemark", "cineplanet", "cinepolis"])
+
 # Keywords that unambiguously indicate cinema content even at non-Cine venues
 _STRONG_CINE_KEYWORDS: frozenset[str] = frozenset([
     "película", "film", "cineclub", "cineclube", "cineteca",
@@ -518,6 +524,19 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
         event["keywords"] = []
         event["kids_friendly"] = False
         return event
+
+    # Cinema scraper override: source prefix beats all other rules.
+    # These scrapers don't pass venue_type through the enricher pipeline at
+    # classification time, so the venue_type hard-signal never fires and the
+    # Música last-resort fallback incorrectly wins.
+    if source_url:
+        _src_prefix = source_url.split(":")[0].lower()
+        if _src_prefix in _CINEMA_SOURCES:
+            event["category"] = "Cine"
+            event["type"] = "Cine"
+            event["keywords"] = sorted(KEYWORD_RULES.get("Cine", []))
+            event["kids_friendly"] = bool(event.get("kids_friendly"))
+            return event
 
     vt_lower = venue_type.lower()
 
