@@ -699,6 +699,9 @@ class TicketmasterScraper(BaseScraper):
                     if pr:
                         result["price_range"] = pr
                         break
+            # Ticketmaster loads prices via JS after page load — the static scraper
+            # cannot capture them in most cases. price_range stays NULL and the
+            # frontend detects the source URL to show "Ver precios en ticketmaster.cl".
 
         return result
 
