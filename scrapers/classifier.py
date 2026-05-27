@@ -43,6 +43,38 @@ from __future__ import annotations
 import re
 from typing import Any
 
+# ── Sports exclusion ─────────────────────────────────────────────────────────
+# Events matching these patterns are not cultural events and must be dropped.
+# Competitions ("Copa Chile", "Liga BetSafe") are matched unconditionally.
+# "vs" matches only when combined with a known football club name to avoid
+# catching music/comedy events that also use "vs" in their titles.
+
+_SPORTS_COMPETITION_PATTERNS: list[re.Pattern] = [
+    re.compile(r'\bcopa\s+(?:chile|libertadores|sudamericana|am[eé]rica)\b', re.IGNORECASE),
+    re.compile(r'\bliga\s+betsafe\b', re.IGNORECASE),
+    re.compile(r'\bprimera\s+divisi[oó]n\b', re.IGNORECASE),
+    re.compile(r'\bcampeonato\s+nacional\b', re.IGNORECASE),
+]
+
+_FOOTBALL_CLUB_NAMES: tuple[str, ...] = (
+    "deportivo", "palestino", "colo-colo", "colo colo",
+    "la serena", "u de chile", "universidad de chile", "universidad católica",
+    "audax", "everton", "cobreloa", "cobresal", "antofagasta",
+    "curicó unido", "curico unido", "iquique", "copiapó",
+    "huachipato", "melipilla", "magallanes",
+)
+
+
+def _is_sports_event(name: str) -> bool:
+    """Return True if the event name looks like a sports/football event."""
+    name_lower = name.lower()
+    if any(p.search(name_lower) for p in _SPORTS_COMPETITION_PATTERNS):
+        return True
+    if re.search(r'\bvs\.?\b', name_lower) and any(c in name_lower for c in _FOOTBALL_CLUB_NAMES):
+        return True
+    return False
+
+
 # ── Canonical categories ───────────────────────────────────────────────────────
 CANONICAL_CATEGORIES: frozenset[str] = frozenset([
     "Música", "Teatro", "Comedia", "Arte", "Cine", "Familia",
@@ -477,6 +509,15 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
     venue_name = event.get("venue_name") or ""
     source_url = event.get("source_url") or ""
     time_start = event.get("time_start")
+
+    # Sports exclusion: football matches and competitions are not cultural events.
+    # Drop them before any further classification.
+    if _is_sports_event(name):
+        event["category"] = None
+        event["type"] = None
+        event["keywords"] = []
+        event["kids_friendly"] = False
+        return event
 
     vt_lower = venue_type.lower()
 
