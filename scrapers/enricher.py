@@ -64,6 +64,15 @@ VENUE_NAME_OVERRIDES: dict[str, str] = {
     "ex restaurant granja educativa": "Ex Restaurante Granja Educativa",
     # Estadio Barnechea
     "estadio barnechea": "Estadio Lo Barnechea",
+    # Merged duplicates
+    "restaurant el 7":                                 "Restaurante El 7",
+    "manhattan club":                                  "Club Manhatan",
+    "club manhatan":                                   "Club Manhatan",
+    "hotel pullman vitacura":                          "Hotel Pullman Santiago Vitacura",
+    "montañita las vizcachas":                         "Montañita Restobar Las Vizcachas",
+    "subterraneo":                                     "Club Subterráneo",
+    "museo de arte contemporaneo mac quinta normal":   "MAC – Quinta Normal",
+    "mac quinta normal":                               "MAC – Quinta Normal",
 }
 
 
