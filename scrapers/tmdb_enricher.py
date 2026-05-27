@@ -313,7 +313,7 @@ def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
         trailer_url = meta.get("trailer_url")
         poster_url = meta.get("poster_url")
 
-        for ev in group:
+        for i, ev in enumerate(group):
             changed = False
 
             if description and ev.description != description:
@@ -337,8 +337,13 @@ def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
                 db.add(ev)
                 stats["enriched"] += 1
 
-        # Commit per-title group to avoid Railway proxy timeouts on large
-        # single transactions (4000+ rows triggers idle-connection cutoff).
+            # Commit every 200 events within a title group so that high-volume
+            # titles (e.g. 2000+ showtimes) don't build transactions large enough
+            # to hit Railway's proxy idle-connection cutoff.
+            if (i + 1) % 200 == 0:
+                db.commit()
+
+        # Final commit for the remainder of this title group.
         db.commit()
     logger.info(
         "[tmdb] Finished — enriched=%d  trailers_added=%d  not_found=%d",
