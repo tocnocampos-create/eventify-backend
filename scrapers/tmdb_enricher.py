@@ -337,7 +337,9 @@ def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
                 db.add(ev)
                 stats["enriched"] += 1
 
-    db.commit()
+        # Commit per-title group to avoid Railway proxy timeouts on large
+        # single transactions (4000+ rows triggers idle-connection cutoff).
+        db.commit()
     logger.info(
         "[tmdb] Finished — enriched=%d  trailers_added=%d  not_found=%d",
         stats["enriched"], stats["trailers_added"], stats["not_found"],
