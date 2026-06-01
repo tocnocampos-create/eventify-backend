@@ -73,7 +73,43 @@ VENUE_NAME_OVERRIDES: dict[str, str] = {
     "subterraneo":                                     "Club Subterráneo",
     "museo de arte contemporaneo mac quinta normal":   "MAC – Quinta Normal",
     "mac quinta normal":                               "MAC – Quinta Normal",
+    # Cinépolis Parque Arauco — prefix-strip in step 4 would reduce this to
+    # "Parque Arauco", which then substring-matches Teatro Mori Parque Arauco.
+    "cinépolis parque arauco": "Cinépolis Parque Arauco",
+    "cinepolis parque arauco": "Cinépolis Parque Arauco",
 }
+
+# ── Source-aware venue overrides ──────────────────────────────────────────────
+# When a scraper's identity is known via source_url, bypass ALL fuzzy matching
+# and force a specific canonical venue name.  This prevents proximity/substring
+# collisions between venues that share words or near-identical coordinates.
+#
+# Keys: "<scraper_prefix>:<partial_venue_name_fragment>" (both lowercased).
+# The scraper prefix is the first colon-delimited segment of source_url
+# (e.g. "cinepolis" from "cinepolis:cl:708:5206").
+# Matched as a substring of "<scraper_prefix>:<venue_name_lower>".
+
+SOURCE_VENUE_OVERRIDES: dict[str, str] = {
+    # Cinépolis Parque Arauco events must never land on Teatro Mori Parque Arauco.
+    # "parque arauco" alone is ambiguous; the scraper prefix makes it unambiguous.
+    "cinepolis:parque arauco": "Cinépolis Parque Arauco",
+    "cinepolis:mall parque":   "Cinépolis Parque Arauco",
+}
+
+
+def get_source_venue_override(source_url: str | None, scraped_venue_name: str) -> str | None:
+    """Return a canonical venue name when scraper + venue name matches a known override.
+
+    Applied before any fuzzy/proximity matching so scraper-identified events are
+    always routed to the correct venue regardless of coordinate proximity or
+    shared name fragments.  Returns None when no override applies.
+    """
+    scraper = source_url.split(":")[0].lower() if source_url else ""
+    key = f"{scraper}:{scraped_venue_name.lower()}"
+    for pattern, canonical in SOURCE_VENUE_OVERRIDES.items():
+        if pattern in key:
+            return canonical
+    return None
 
 
 def apply_overrides(name: str) -> str:
@@ -329,6 +365,15 @@ def enrich(event: dict[str, Any], db: Session) -> dict[str, Any]:
     venue_name: str = apply_overrides((event.get("venue_name") or "").strip())
     if not venue_name:
         return event
+
+    # ── 0. Source-aware override (highest priority) ───────────────────────────
+    # When source_url identifies the scraper, bypass all fuzzy/proximity matching
+    # and resolve directly to the canonical venue name.  Prevents collisions
+    # between venues that share name fragments or near-identical coordinates
+    # (e.g. Cinépolis Parque Arauco vs Teatro Mori Parque Arauco).
+    source_override = get_source_venue_override(event.get("source_url"), venue_name)
+    if source_override:
+        venue_name = source_override
 
     venue_name_lower = venue_name.lower()
     venue = None
