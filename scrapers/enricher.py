@@ -77,6 +77,9 @@ VENUE_NAME_OVERRIDES: dict[str, str] = {
     # "Parque Arauco", which then substring-matches Teatro Mori Parque Arauco.
     "cinépolis parque arauco": "Cinépolis Parque Arauco",
     "cinepolis parque arauco": "Cinépolis Parque Arauco",
+    # La Puerta Amarilla — slug variant merged into the canonical venue (id=459)
+    "lapuertaamarilla":           "Bar La Puerta Amarilla",
+    "la puerta amarilla":         "Bar La Puerta Amarilla",
     # MAC – Parque Forestal — park and museum share near-identical names/coords;
     # force all variants to the museum so events never land on the park.
     "parque forestal":         "MAC – Parque Forestal",
