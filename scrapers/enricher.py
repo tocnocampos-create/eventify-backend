@@ -77,6 +77,10 @@ VENUE_NAME_OVERRIDES: dict[str, str] = {
     # "Parque Arauco", which then substring-matches Teatro Mori Parque Arauco.
     "cinépolis parque arauco": "Cinépolis Parque Arauco",
     "cinepolis parque arauco": "Cinépolis Parque Arauco",
+    # MAC – Parque Forestal — park and museum share near-identical names/coords;
+    # force all variants to the museum so events never land on the park.
+    "parque forestal":         "MAC – Parque Forestal",
+    "mac parque forestal":     "MAC – Parque Forestal",
 }
 
 # ── Source-aware venue overrides ──────────────────────────────────────────────
