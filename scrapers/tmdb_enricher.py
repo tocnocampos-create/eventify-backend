@@ -239,7 +239,10 @@ def fetch_tmdb_metadata(title: str) -> dict[str, Any] | None:
 
 # ── DB apply ───────────────────────────────────────────────────────────────────
 
-def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
+def apply_tmdb_to_cinema_events(
+    db: Session,
+    since_hours: int | None = None,
+) -> dict[str, int]:
     """Enrich Cine events in the DB with TMDB metadata.
 
     Only processes events that are missing at least one of: description,
@@ -247,10 +250,15 @@ def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
     rather than O(all cinema events), preventing Railway cron timeouts as the
     DB grows.
 
+    Args:
+        since_hours: If set, restrict to events scraped in the last N hours
+                     (incremental mode for daily cron). None = all unenriched.
+
     Commits the changes and returns stats:
         {"enriched": N, "trailers_added": N, "not_found": N}
     """
     from app.db.models import Event, EventCommunityLink  # noqa: PLC0415
+    from datetime import datetime, timezone, timedelta  # noqa: PLC0415
 
     stats = {"enriched": 0, "trailers_added": 0, "not_found": 0}
 
@@ -264,7 +272,7 @@ def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
     )
 
     # Only fetch events that still need at least one enrichment field.
-    cinema_events: list[Any] = (
+    query = (
         db.query(Event)
         .filter(Event.category == "Cine")
         .filter(
@@ -276,8 +284,15 @@ def apply_tmdb_to_cinema_events(db: Session) -> dict[str, int]:
                 .filter(EventCommunityLink.platform == "youtube")
             )
         )
-        .all()
     )
+
+    if since_hours is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+        query = query.filter(Event.scraped_at >= cutoff)
+        logger.info("[tmdb] Incremental mode — only events scraped since %s UTC",
+                    cutoff.strftime("%Y-%m-%d %H:%M"))
+
+    cinema_events: list[Any] = query.all()
 
     if not cinema_events:
         logger.info("[tmdb] All Cine events already fully enriched — nothing to do")
@@ -366,6 +381,8 @@ if __name__ == "__main__":
     parser.add_argument("--title", help="Fetch metadata for a single movie title (implies --dry-run)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Fetch metadata but do not write to DB")
+    parser.add_argument("--since-hours", type=int, default=None,
+                        help="Only enrich events scraped in the last N hours (incremental mode)")
     args = parser.parse_args()
 
     if args.title:
@@ -386,7 +403,7 @@ if __name__ == "__main__":
         from scrapers.base_scraper import make_scraper_session
         engine, db = make_scraper_session()
         try:
-            result = apply_tmdb_to_cinema_events(db)
+            result = apply_tmdb_to_cinema_events(db, since_hours=args.since_hours)
             print(f"\nDone — enriched={result['enriched']}  "
                   f"trailers_added={result['trailers_added']}  "
                   f"not_found={result['not_found']}")

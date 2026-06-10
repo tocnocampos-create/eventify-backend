@@ -235,6 +235,27 @@ def _check_stale_scrapers(
     return stale
 
 
+# ── TMDB incremental enrichment ──────────────────────────────────────────────
+
+def _run_tmdb_enrichment_incremental(db, since_hours: int = 24) -> None:
+    """Enrich only Cine events scraped in the last N hours with TMDB metadata.
+
+    Runs in ~5-10 min (vs 20+ hours for full enrichment) because it only
+    processes new films introduced in today's scraper run.
+    """
+    try:
+        from scrapers.tmdb_enricher import apply_tmdb_to_cinema_events  # noqa: PLC0415
+        stats = apply_tmdb_to_cinema_events(db, since_hours=since_hours)
+        logger.info(
+            "[tmdb] incremental enriched=%d  trailers_added=%d  not_found=%d",
+            stats["enriched"], stats["trailers_added"], stats["not_found"],
+        )
+    except EnvironmentError as exc:
+        logger.warning("[tmdb] Skipping enrichment — %s", exc)
+    except Exception as exc:
+        logger.error("[tmdb] Enrichment failed: %s", exc, exc_info=True)
+
+
 # ── Expired event cleanup ─────────────────────────────────────────────────────
 
 def _cleanup_expired_events(db, dry_run: bool = False) -> dict[str, int]:
@@ -356,6 +377,12 @@ def main() -> None:
         except Exception as exc:
             logger.error("Scraper %s crashed: %s", scraper.name, exc, exc_info=True)
             scraper_err.append(scraper.name)
+
+    # ── Post-pipeline: incremental TMDB enrichment (last 24h only) ───────────
+    if not args.dry_run:
+        logger.info("━━━ Running TMDB enrichment (incremental — last 24h) ━━━")
+        with Session() as db:
+            _run_tmdb_enrichment_incremental(db, since_hours=24)
 
     # ── Post-pipeline: expired event cleanup ──────────────────────────────────
     logger.info("━━━ Running expired event cleanup ━━━")
