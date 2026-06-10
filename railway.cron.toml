@@ -15,7 +15,7 @@ dockerfilePath = "Dockerfile"
 buildTarget = "prod"
 
 [deploy]
-startCommand = "python scrapers/run_all.py"
+startCommand = "python scrapers/run_scrapers_only.py"
 cronSchedule = "0 9 * * *"
 # Cron jobs do not need health checks or restart policies.
 # Railway marks the run as failed if the process exits with code != 0.
