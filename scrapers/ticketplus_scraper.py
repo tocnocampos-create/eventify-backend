@@ -28,6 +28,8 @@ Scraping strategy (in priority order — seen_urls deduplicates across sources):
      teatro-universidad-de-chile  → Teatro Universidad de Chile
      planetario-huechuraba        → Planetario de Santiago
      gam                          → GAM (usually empty; gam-subdomain covers it)
+     universidad-mayor            → Sala K U.Mayor
+     centro-arte-alameda          → Centro Arte Alameda (404 → skipped; states-rm covers it)
 
 2. /states/region-metropolitana  (catch-all RM page, 337+ event links)
    Runs after company pages; anything not already in seen_urls gets fetched.
@@ -111,12 +113,18 @@ COMPANY_CONFIG: list[tuple[str, str, str | None, bool]] = [
     ("teatro-finis-terrae",                      "Teatro Finis Terrae",           "Teatro",  True),
     ("pontificia-universidad-catolica-de-chile", "Teatro UC",                     "Teatro",  True),
     # Already-configured venues (kept for compatibility)
-    ("sala-nemesio",                             "Sala Nemesio Antúnez",          None,      False),
-    ("m100",                                     "Matucana 100",                  None,      False),
+    ("sala-nemesio",                             "Sala Nemesio",                  None,      False),
+    ("m100",                                     "Centro Cultural Matucana 100",  None,      False),
     ("corpartes",                                "CorpArtes",                     "Teatro",  True),
     ("teatro-universidad-de-chile",              "Teatro Universidad de Chile",   "Teatro",  True),
     ("planetario-huechuraba",                    "Planetario de Santiago",        None,      False),
     ("gam",                                      "GAM",                           None,      False),
+    # Small cultural venues
+    ("universidad-mayor",                        "Sala K U.Mayor",                "Arte",    False),
+    # centro-arte-alameda has no company page on TicketPlus (404); events are
+    # captured by the states-rm catch-all and attributed to venue id=118.
+    # The entry below enables the fallback-search path for future-proofing.
+    ("centro-arte-alameda",                      "Centro Arte Alameda",           "Arte",    False),
 ]
 
 # ── Región Metropolitana catch-all ────────────────────────────────────────────
@@ -673,6 +681,46 @@ class TicketPlusScraper(BaseScraper):
 
         return None
 
+    # ── Company URL resolver (with search fallback) ───────────────────────────
+
+    def _resolve_company_url(self, slug: str, venue_name: str) -> str | None:
+        """Return the listing URL for a company slug, or None if unavailable.
+
+        Tries the canonical /companies/{slug} page first.  If that returns a
+        4xx, falls back to /search?q={venue_name}.  Returns None (with a
+        warning) if both fail so the caller can skip gracefully.
+        """
+        from urllib.parse import quote_plus
+
+        direct = f"{BASE_URL}/companies/{slug}"
+        try:
+            r = self.session.head(direct, timeout=10, allow_redirects=True)
+            if r.status_code < 400:
+                return direct
+            logger.warning(
+                "[ticketplus] Company page %s → %d, trying search fallback",
+                direct, r.status_code,
+            )
+        except requests.RequestException as exc:
+            logger.warning("[ticketplus] HEAD %s failed: %s", direct, exc)
+
+        search = f"{BASE_URL}/search?q={quote_plus(venue_name)}"
+        try:
+            r = self.session.head(search, timeout=10, allow_redirects=True)
+            if r.status_code < 400:
+                logger.info(
+                    "[ticketplus] Search fallback for %r: %s", venue_name, search
+                )
+                return search
+        except requests.RequestException as exc:
+            logger.warning("[ticketplus] HEAD search %s failed: %s", search, exc)
+
+        logger.warning(
+            "[ticketplus] No working URL for company=%r venue=%r — skipping",
+            slug, venue_name,
+        )
+        return None
+
     # ── Company page direct-link extractor ───────────────────────────────────
 
     def _scrape_company_page(
@@ -695,12 +743,19 @@ class TicketPlusScraper(BaseScraper):
         work well here.  Pagination follows rel="next" links.
 
         Args:
-            start_url:       Full URL to start from.  Defaults to
-                             {BASE_URL}/companies/{company_slug}.
+            start_url:       Full URL to start from.  When None, resolved via
+                             _resolve_company_url (tries company page, then search).
             skip_geo_filter: False = apply SANTIAGO_TOKENS filter on event address.
                              True (default) = company/RM pages are already RM-scoped.
         """
-        url: str | None = start_url or f"{BASE_URL}/companies/{company_slug}"
+        if start_url:
+            url: str | None = start_url
+        else:
+            url = self._resolve_company_url(
+                company_slug, venue_name_override or company_slug
+            )
+        if url is None:
+            return
         page = 1
 
         logger.info("[ticketplus] Scraping page %r — %s", source_label, url)
@@ -1207,20 +1262,23 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Filter to one source if requested
+    # Filter to one source if requested.
+    # Must mutate module-level globals in-place (or rebind them here in __main__)
+    # so that fetch_events(), which runs in __main__'s global scope, sees the change.
+    # Using _self.COMPANY_CONFIG = … would modify scrapers.ticketplus_scraper's
+    # namespace — a different dict — and be silently ignored.
     if args.source:
-        import scrapers.ticketplus_scraper as _self
         if args.source.startswith("company:"):
             slug = args.source[len("company:"):]
-            _self.COMPANY_CONFIG = [c for c in COMPANY_CONFIG if c[0] == slug]
-            _self.STATES_RM_URL = ""
-            _self.GAM_SUBDOMAIN = ""
+            COMPANY_CONFIG[:] = [c for c in COMPANY_CONFIG if c[0] == slug]
+            STATES_RM_URL = ""   # noqa: F841  rebinds __main__ global
+            GAM_SUBDOMAIN  = ""  # noqa: F841
         elif args.source == "states-rm":
-            _self.COMPANY_CONFIG = []
-            _self.GAM_SUBDOMAIN = ""
+            COMPANY_CONFIG[:] = []
+            GAM_SUBDOMAIN  = ""  # noqa: F841
         elif args.source == "gam-subdomain":
-            _self.COMPANY_CONFIG = []
-            _self.STATES_RM_URL = ""
+            COMPANY_CONFIG[:] = []
+            STATES_RM_URL = ""   # noqa: F841
 
     scraper = TicketPlusScraper(
         max_pages=args.max_pages,
