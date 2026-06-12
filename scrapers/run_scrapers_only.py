@@ -36,6 +36,10 @@ from scrapers.puntoticket_scraper import PuntoTicketScraper
 from scrapers.ticketmaster_scraper import TicketmasterScraper
 from scrapers.ticketplus_scraper import TicketPlusScraper
 from scrapers.museo_scraper import MuseoScraper
+from scrapers.biografo_scraper import BiografoScraper
+from scrapers.normandie_scraper import NormandieScraper
+from scrapers.cineteca_scraper import CinetecaScraper
+from scrapers.clubdejazz_scraper import ClubDeJazzScraper
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -183,6 +187,10 @@ _SCRAPER_SOURCE_PATTERNS: dict[str, str] = {
     "evently":      "%evently%",
     "portaldisc":   "%portaldisc%",
     "museo":        "museo:%",
+    "biografo":     "biografo:%",
+    "normandie":    "https://www.flow.cl/%",
+    "cineteca":     "https://cinetecanacional.gob.cl/%",
+    "clubdejazz":   "clubdejazz:%",
 }
 
 
@@ -351,6 +359,10 @@ def main() -> None:
         EventlyScraper(max_pages=args.max_pages, max_events=args.max_events),
         PortalDiscScraper(max_pages=args.max_pages, max_events=args.max_events),
         MuseoScraper(max_events=args.max_events),
+        BiografoScraper(max_events=args.max_events),
+        NormandieScraper(max_events=args.max_events),
+        CinetecaScraper(max_events=args.max_events),
+        ClubDeJazzScraper(max_events=args.max_events),
     ]
 
     for scraper in scrapers:
