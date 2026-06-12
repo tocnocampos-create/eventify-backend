@@ -489,6 +489,9 @@ def enrich(event: dict[str, Any], db: Session) -> dict[str, Any]:
         # Backfill address on the venue row if we have new data and it was blank
         if not venue.address and event.get("address"):
             venue.address = event["address"]
+        # Use venue cover as fallback image when the scraper found none
+        if not event.get("image_url") and venue.cover_image_url:
+            event["image_url"] = venue.cover_image_url
         logger.debug(
             "Matched venue %r → id=%d  type=%s",
             venue_name, venue.id, venue.venue_type,
