@@ -24,7 +24,7 @@ import logging
 import os
 import re
 import sys
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -57,6 +57,12 @@ _MONTHS_ES = {
     "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
     "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
 }
+
+def _normandie_price_range(show_date: date) -> list[float]:
+    """Return [price, price] based on day: Mon–Thu 4500, Fri–Sun 5500."""
+    price = 4500.0 if show_date.weekday() < 4 else 5500.0  # Mon=0 … Thu=3
+    return [price, price]
+
 
 # Maps CSS class name → (day_name_es, iso_weekday 0=Mon)
 _DAY_CLASSES = {
@@ -137,6 +143,7 @@ def _parse_day_section(
         return events
 
     iso_date = show_date.isoformat()
+    now = datetime.now()
 
     # Walk children looking for "HH:MM hrs." text nodes followed by <strong><a>
     current_time: str | None = None
@@ -153,14 +160,22 @@ def _parse_day_section(
                     title = a.get_text(strip=True)
                     href  = a["href"]
                     if title and href:
+                        # Skip showtimes that have already passed
+                        showtime_dt = datetime.strptime(
+                            f"{iso_date} {current_time}", "%Y-%m-%d %H:%M"
+                        )
+                        if showtime_dt <= now:
+                            current_time = None
+                            continue
                         events.append({
-                            "name":       title,
-                            "date":       iso_date,
-                            "time_start": current_time,
-                            "source_url": href,
-                            "url":        href,
-                            "venue_name": NORMANDIE_CONFIG["venue_name"],
-                            "category":   NORMANDIE_CONFIG["category"],
+                            "name":        title,
+                            "date":        iso_date,
+                            "time_start":  current_time,
+                            "source_url":  href,
+                            "url":         href,
+                            "venue_name":  NORMANDIE_CONFIG["venue_name"],
+                            "category":    NORMANDIE_CONFIG["category"],
+                            "price_range": _normandie_price_range(show_date),
                         })
                     current_time = None
             # Time text sometimes appears inside a <br> sibling — check for
@@ -304,6 +319,15 @@ if __name__ == "__main__":
                 db.rollback()
                 stats["failed"] += 1
         db.commit()
+
+        # Enrich newly saved Normandie events with TMDB posters
+        try:
+            from scrapers.tmdb_enricher import apply_tmdb_to_cinema_events
+            tmdb = apply_tmdb_to_cinema_events(db, since_hours=1)
+            print(f"  TMDB: enriched={tmdb['enriched']} posters_added={tmdb['trailers_added']}")
+        except Exception as exc:
+            logger.warning("TMDB enrichment skipped: %s", exc)
+
         db.close()
         engine.dispose()
         print(f"\n── Results: {stats}")

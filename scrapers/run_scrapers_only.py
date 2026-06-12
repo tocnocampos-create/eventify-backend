@@ -21,6 +21,9 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
+from psycopg2 import OperationalError as Psycopg2OpError
+from sqlalchemy.exc import OperationalError as SAOpError
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scrapers import classifier, deduplicator, enricher
@@ -40,6 +43,7 @@ from scrapers.biografo_scraper import BiografoScraper
 from scrapers.normandie_scraper import NormandieScraper
 from scrapers.cineteca_scraper import CinetecaScraper
 from scrapers.clubdejazz_scraper import ClubDeJazzScraper
+from scrapers.thelonious_scraper import TheloniousScraper
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -71,17 +75,23 @@ def _run_pipeline(
     if not raw_events:
         return stats
 
+    # Enrich in batches of 500 with a fresh session each batch so no single
+    # session stays open long enough for Railway to kill it (~40 min timeout).
+    ENRICH_BATCH = 500
     processed: list[dict] = []
-    for ev in raw_events:
-        try:
-            ev = classifier.classify(ev)
-            ev = enricher.enrich(ev, db)
-            if ev.get("venue_type") and not ev.get("category"):
-                ev = classifier.classify(ev)
-            processed.append(ev)
-        except Exception as exc:
-            logger.warning("Pipeline error for %r: %s", ev.get("name"), exc)
-            stats["failed"] += 1
+    for enrich_start in range(0, len(raw_events), ENRICH_BATCH):
+        enrich_chunk = raw_events[enrich_start : enrich_start + ENRICH_BATCH]
+        with Session() as enrich_db:
+            for ev in enrich_chunk:
+                try:
+                    ev = classifier.classify(ev)
+                    ev = enricher.enrich(ev, enrich_db)
+                    if ev.get("venue_type") and not ev.get("category"):
+                        ev = classifier.classify(ev)
+                    processed.append(ev)
+                except Exception as exc:
+                    logger.warning("Pipeline error for %r: %s", ev.get("name"), exc)
+                    stats["failed"] += 1
 
     logger.info("[%s] classified+enriched %d events", scraper.name, len(processed))
 
@@ -109,6 +119,21 @@ def _run_pipeline(
                         save_db.flush()
                         sp.commit()
                         stats[result] += 1
+                    except (Psycopg2OpError, SAOpError) as exc:
+                        # Connection-level failure: the session is unusable.
+                        # Rollback and abandon the rest of this batch so we
+                        # don't cascade "Can't reconnect" for every event.
+                        logger.warning("Save failed for %r: %s", ev.get("name"), exc)
+                        stats["failed"] += 1
+                        try:
+                            save_db.rollback()
+                        except Exception:
+                            pass
+                        logger.warning(
+                            "[%s] Connection dropped — abandoning batch %d–%d",
+                            scraper.name, batch_start + 1, batch_start + len(batch),
+                        )
+                        break
                     except Exception as exc:
                         logger.warning("Save failed for %r: %s", ev.get("name"), exc)
                         try:
