@@ -41,7 +41,7 @@ THELONIOUS_CONFIG = {
     "venue_name": "Thelonious Club de Jazz",
     "category": "Música",
     "source_prefix": "thelonious",
-    "ticket_url": "https://www.theloniouschile.com/cartelera",
+    "ticket_url": "https://www.theloniouschile.com/reservas",
 }
 
 # Day abbreviation → ISO weekday (Mon=0)
