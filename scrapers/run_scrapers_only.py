@@ -216,6 +216,7 @@ _SCRAPER_SOURCE_PATTERNS: dict[str, str] = {
     "normandie":    "https://www.flow.cl/%",
     "cineteca":     "https://cinetecanacional.gob.cl/%",
     "clubdejazz":   "clubdejazz:%",
+    "thelonious":   "thelonious:%",
 }
 
 
@@ -388,6 +389,7 @@ def main() -> None:
         NormandieScraper(max_events=args.max_events),
         CinetecaScraper(max_events=args.max_events),
         ClubDeJazzScraper(max_events=args.max_events),
+        TheloniousScraper(max_events=args.max_events),
     ]
 
     for scraper in scrapers:
