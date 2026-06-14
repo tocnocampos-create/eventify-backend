@@ -19,6 +19,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 from psycopg2 import OperationalError as Psycopg2OpError
@@ -43,7 +44,13 @@ from scrapers.biografo_scraper import BiografoScraper
 from scrapers.normandie_scraper import NormandieScraper
 from scrapers.cineteca_scraper import CinetecaScraper
 from scrapers.clubdejazz_scraper import ClubDeJazzScraper
-from scrapers.thelonious_scraper import TheloniousScraper
+# Thelonious requires Playwright — skip gracefully if not available
+try:
+    from scrapers.thelonious_scraper import TheloniousScraper
+    _THELONIOUS_AVAILABLE = True
+except ImportError:
+    _THELONIOUS_AVAILABLE = False
+    print("⚠️  Playwright not available — skipping Thelonious scraper (run manually)")
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -101,7 +108,8 @@ def _run_pipeline(
         _print_sample(processed, verbose=verbose)
         return stats
 
-    COMMIT_EVERY = 200
+    COMMIT_EVERY = 50
+    MAX_BATCH_RETRIES = 3
     now = datetime.now(timezone.utc)
 
     for ev in processed:
@@ -110,56 +118,68 @@ def _run_pipeline(
 
     for batch_start in range(0, len(processed), COMMIT_EVERY):
         batch = processed[batch_start : batch_start + COMMIT_EVERY]
-        try:
-            with Session() as save_db:
-                for ev in batch:
-                    try:
-                        sp = save_db.begin_nested()
-                        result = deduplicator.save_or_update(ev, save_db)
-                        save_db.flush()
-                        sp.commit()
-                        stats[result] += 1
-                    except (Psycopg2OpError, SAOpError) as exc:
-                        # Connection-level failure: the session is unusable.
-                        # Rollback and abandon the rest of this batch so we
-                        # don't cascade "Can't reconnect" for every event.
-                        logger.warning("Save failed for %r: %s", ev.get("name"), exc)
-                        stats["failed"] += 1
+        batch_label = f"{batch_start + 1}–{batch_start + len(batch)}"
+
+        for attempt in range(1, MAX_BATCH_RETRIES + 1):
+            batch_stats: dict[str, int] = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+            connection_dropped = False
+            try:
+                with Session() as save_db:
+                    for ev in batch:
                         try:
-                            save_db.rollback()
-                        except Exception:
-                            pass
-                        logger.warning(
-                            "[%s] Connection dropped — abandoning batch %d–%d",
-                            scraper.name, batch_start + 1, batch_start + len(batch),
-                        )
-                        break
-                    except Exception as exc:
-                        logger.warning("Save failed for %r: %s", ev.get("name"), exc)
-                        try:
-                            sp.rollback()
-                        except Exception as sp_exc:
-                            logger.warning(
-                                "Savepoint rollback failed (%s) — abandoning batch "
-                                "%d–%d for %s",
-                                sp_exc,
-                                batch_start + 1,
-                                batch_start + len(batch),
-                                scraper.name,
-                            )
-                            stats["failed"] += 1
+                            sp = save_db.begin_nested()
+                            result = deduplicator.save_or_update(ev, save_db)
+                            save_db.flush()
+                            sp.commit()
+                            batch_stats[result] = batch_stats.get(result, 0) + 1
+                        except (Psycopg2OpError, SAOpError) as exc:
+                            logger.warning("Connection error saving %r: %s", ev.get("name"), exc)
+                            try:
+                                save_db.rollback()
+                            except Exception:
+                                pass
+                            connection_dropped = True
                             break
-                        stats["failed"] += 1
-                save_db.commit()
-                logger.debug(
-                    "[%s] Batch %d–%d committed",
-                    scraper.name, batch_start + 1, batch_start + len(batch),
+                        except Exception as exc:
+                            logger.warning("Save failed for %r: %s", ev.get("name"), exc)
+                            try:
+                                sp.rollback()
+                            except Exception as sp_exc:
+                                logger.warning(
+                                    "Savepoint rollback failed (%s) — abandoning batch "
+                                    "%s for %s", sp_exc, batch_label, scraper.name,
+                                )
+                                batch_stats["failed"] += 1
+                                connection_dropped = True
+                                break
+                            batch_stats["failed"] += 1
+
+                    if not connection_dropped:
+                        save_db.commit()
+                        logger.debug("[%s] Batch %s committed", scraper.name, batch_label)
+
+            except Exception as exc:
+                logger.warning("[%s] Batch %s session error: %s", scraper.name, batch_label, exc)
+                connection_dropped = True
+
+            if not connection_dropped:
+                for k, v in batch_stats.items():
+                    stats[k] = stats.get(k, 0) + v
+                break  # batch succeeded — move to next
+
+            if attempt < MAX_BATCH_RETRIES:
+                wait = 2 ** attempt  # 2s, 4s
+                logger.warning(
+                    "[%s] Batch %s dropped (attempt %d/%d) — retrying in %ds",
+                    scraper.name, batch_label, attempt, MAX_BATCH_RETRIES, wait,
                 )
-        except Exception as exc:
-            logger.warning(
-                "[%s] Batch session failed (events %d–%d): %s",
-                scraper.name, batch_start + 1, batch_start + len(batch), exc,
-            )
+                time.sleep(wait)
+            else:
+                logger.error(
+                    "[%s] Batch %s failed after %d attempts — abandoning",
+                    scraper.name, batch_label, MAX_BATCH_RETRIES,
+                )
+                stats["failed"] += len(batch)
 
     events_with_links = [ev for ev in processed if ev.get("_trailer_url")]
     if events_with_links:
@@ -361,7 +381,18 @@ def main() -> None:
                 run_start.strftime("%Y-%m-%d %H:%M:%S"))
     logger.info("━" * 50)
 
-    engine = create_engine(_get_database_url(), pool_pre_ping=True)
+    engine = create_engine(
+        _get_database_url(),
+        pool_pre_ping=True,
+        pool_recycle=300,          # recycle connections every 5 min
+        connect_args={
+            "keepalives": 1,
+            "keepalives_idle": 30,     # send first keepalive after 30s idle
+            "keepalives_interval": 10, # repeat every 10s
+            "keepalives_count": 5,     # drop after 5 missed keepalives
+            "connect_timeout": 10,
+        },
+    )
     Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     if args.enrich:
@@ -389,20 +420,14 @@ def main() -> None:
         NormandieScraper(max_events=args.max_events),
         CinetecaScraper(max_events=args.max_events),
         ClubDeJazzScraper(max_events=args.max_events),
-        TheloniousScraper(max_events=args.max_events),
+        *([TheloniousScraper(max_events=args.max_events)] if _THELONIOUS_AVAILABLE else []),
     ]
 
     for scraper in scrapers:
         scraper_start = datetime.now(timezone.utc)
         logger.info("━━━ Running scraper: %s ━━━", scraper.name)
         try:
-            with Session() as db:
-                try:
-                    from sqlalchemy import text as _text  # noqa: PLC0415
-                    db.execute(_text("SELECT 1"))
-                except Exception:
-                    db.rollback()
-                stats = _run_pipeline(scraper, db, dry_run=args.dry_run, verbose=args.verbose, Session=Session)
+            stats = _run_pipeline(scraper, None, dry_run=args.dry_run, verbose=args.verbose, Session=Session)
             for key in totals:
                 totals[key] += stats.get(key, 0)
             elapsed = (datetime.now(timezone.utc) - scraper_start).seconds

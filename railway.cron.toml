@@ -12,7 +12,7 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
-buildTarget = "prod"
+buildTarget = "cron"
 
 [deploy]
 startCommand = "python scrapers/run_scrapers_only.py"
