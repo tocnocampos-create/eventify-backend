@@ -9,11 +9,6 @@
 # During Chilean Summer Time (UTC-4, roughly Nov–Mar) this runs at 05:00 local —
 # adjust cronSchedule to "0 10 * * *" during that period if needed.
 
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
-buildTarget = "cron"
-
 [deploy]
 startCommand = "python scrapers/run_scrapers_only.py"
 cronSchedule = "0 9 * * *"

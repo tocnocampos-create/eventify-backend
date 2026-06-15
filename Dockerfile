@@ -51,13 +51,3 @@ EXPOSE 8000
 # start.sh runs: alembic upgrade head → uvicorn on $PORT
 CMD ["./start.sh"]
 
-# Cron stage — extends prod, adds Playwright + Chromium for Thelonious scraper.
-# The main API image stays lean; only the cron service pays the ~400 MB browser cost.
-FROM prod as cron
-
-USER root
-RUN pip install --no-cache-dir playwright==1.44.0 && playwright install chromium --with-deps
-USER appuser
-
-CMD ["python", "scrapers/run_scrapers_only.py"]
-
