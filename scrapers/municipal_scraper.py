@@ -75,6 +75,34 @@ def _slugify(text: str) -> str:
     return text.strip("-")
 
 
+def _parse_price_range(price_raw: str) -> list[float] | None:
+    """Parse Chilean price string → [min, max] float list, or None.
+
+    Examples:
+      'Desde $8.500'              → [8500.0, 8500.0]
+      'Entrada general $14.000'   → [14000.0, 14000.0]
+      'Gratuito'                  → [0.0, 0.0]
+      'Desde $5.500 a $20.000'    → [5500.0, 20000.0]
+    """
+    price_raw = price_raw.strip()
+    if not price_raw:
+        return None
+    if re.search(r"gratu", price_raw, re.IGNORECASE):
+        return [0.0, 0.0]
+    amounts = re.findall(r"\$[\d.]+", price_raw)
+    if not amounts:
+        return None
+    floats = []
+    for a in amounts:
+        try:
+            floats.append(float(a.replace("$", "").replace(".", "")))
+        except ValueError:
+            continue
+    if not floats:
+        return None
+    return [min(floats), max(floats)]
+
+
 def _parse_hour(hour_str: str) -> str:
     """Convert '4:00 pm' / '12:00 am' → '16:00' / '00:00'."""
     m = re.match(r"(\d{1,2}):(\d{2})\s*(am|pm)", hour_str.strip(), re.IGNORECASE)
@@ -144,7 +172,8 @@ class MunicipalScraper(BaseScraper):
 
                 show_url = (show.get("url") or "").strip()
                 image_url = (show.get("img") or {}).get("src") or None
-                price_raw = (show.get("price") or "").strip() or None
+                price_raw = (show.get("price") or "").strip()
+                price_range = _parse_price_range(price_raw) if price_raw else None
                 api_category = (show.get("category") or "").strip()
                 category = _CATEGORY_MAP.get(api_category, "Música")
 
@@ -181,8 +210,8 @@ class MunicipalScraper(BaseScraper):
                         }
                         if image_url:
                             ev["image_url"] = image_url
-                        if price_raw:
-                            ev["price_range"] = price_raw
+                        if price_range is not None:
+                            ev["price_range"] = price_range
                         all_events.append(ev)
 
                 else:
