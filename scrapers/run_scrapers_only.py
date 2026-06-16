@@ -44,6 +44,7 @@ from scrapers.biografo_scraper import BiografoScraper
 from scrapers.normandie_scraper import NormandieScraper
 from scrapers.cineteca_scraper import CinetecaScraper
 from scrapers.clubdejazz_scraper import ClubDeJazzScraper
+from scrapers.municipal_scraper import MunicipalScraper
 # Thelonious requires Playwright — skip gracefully if not available
 try:
     from scrapers.thelonious_scraper import TheloniousScraper
@@ -420,6 +421,7 @@ def main() -> None:
         NormandieScraper(max_events=args.max_events),
         CinetecaScraper(max_events=args.max_events),
         ClubDeJazzScraper(max_events=args.max_events),
+        MunicipalScraper(max_events=args.max_events),
         *([TheloniousScraper(max_events=args.max_events)] if _THELONIOUS_AVAILABLE else []),
     ]
 
