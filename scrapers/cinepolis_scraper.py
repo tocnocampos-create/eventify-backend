@@ -588,6 +588,14 @@ class CinepolisScraper(BaseScraper):
                 break
 
         logger.info("[cinepolis] Total events collected: %d", len(all_events))
+
+        if not all_events and not self.max_events:
+            raise RuntimeError(
+                "[cinepolis] All sectors returned 0 events — "
+                "the cinepolischile.cl endpoint is likely redirecting or the API response shape changed. "
+                "Check for HTTP 302 redirects in _post_sector()."
+            )
+
         return all_events
 
     # ── Debug helper ──────────────────────────────────────────────────────────
