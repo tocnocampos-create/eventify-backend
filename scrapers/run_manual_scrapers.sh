@@ -25,6 +25,20 @@ python scrapers/thelonious_scraper.py || echo "[!] thelonious_scraper.py exited 
 
 echo ""
 echo "████████████████████████████████████████████████████████████"
+echo "  TICKETMASTER SCRAPER"
+echo "████████████████████████████████████████████████████████████"
+echo ""
+python scrapers/ticketmaster_scraper.py || echo "[!] ticketmaster_scraper.py exited with error $?"
+
+echo ""
+echo "████████████████████████████████████████████████████████████"
+echo "  FEVER SCRAPER"
+echo "████████████████████████████████████████████████████████████"
+echo ""
+python scrapers/fever_scraper.py || echo "[!] fever_scraper.py exited with error $?"
+
+echo ""
+echo "████████████████████████████████████████████████████████████"
 echo "  DONE"
 echo "████████████████████████████████████████████████████████████"
 echo ""
