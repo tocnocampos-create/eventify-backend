@@ -242,8 +242,8 @@ class MunicipalScraper(BaseScraper):
                     }
                     if image_url:
                         ev["image_url"] = image_url
-                    if price_raw:
-                        ev["price_range"] = price_raw
+                    if price_range is not None:
+                        ev["price_range"] = price_range
                     all_events.append(ev)
 
                 if self.max_events and len(all_events) >= self.max_events:
