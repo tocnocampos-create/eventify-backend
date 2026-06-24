@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     DB_NAME: str = "eventify"
     DATABASE_URL: Optional[str] = None
 
+    # Groq (AI search)
+    GROQ_API_KEY: Optional[str] = None
+
     # CORS — comma-separated list of allowed origins.
     # Use "*" to allow all origins (fine for a public read-only API).
     # Example: "https://app.eventify.cl,https://admin.eventify.cl"
