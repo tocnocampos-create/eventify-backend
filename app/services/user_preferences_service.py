@@ -99,7 +99,7 @@ class UserPreferencesService:
     def get_saved_events(db: Session, user_id: int) -> List[Event]:
         saves = (
             db.query(UserSavedEvent)
-            .options(joinedload(UserSavedEvent.event))
+            .options(joinedload(UserSavedEvent.event).joinedload(Event.venue))
             .filter_by(user_id=user_id)
             .all()
         )
@@ -210,6 +210,9 @@ class UserPreferencesService:
             .filter(Event.date >= today)
             .all()
         )
+        user_categories = {i.category.lower() for i in interests if i.category}
+        user_wants_cine = 'cine' in user_categories
+
         exclude_ids = set(saved_event_ids)
         scored: List[tuple] = []
         for ev in upcoming:
@@ -226,11 +229,16 @@ class UserPreferencesService:
                         score += 2
             if ev.venue_id in followed_venue_ids:
                 score += 1
+            # Cine penalty: suppress cinema for users who didn't ask for it
+            if ev.category and ev.category.lower() == 'cine' and not user_wants_cine:
+                score -= 2
+            elif ev.category and ev.category.lower() != 'cine':
+                score += 0.5  # diversity boost for non-cinema content
             if score > 0:
                 scored.append((score, ev.date, ev))
 
         scored.sort(key=lambda x: (-x[0], x[1]))
-        recommended_events = [item[2] for item in scored[:10]]
+        recommended_events = [item[2] for item in scored[:15]]
 
         return {
             "followed_venue_events": followed_venue_events,

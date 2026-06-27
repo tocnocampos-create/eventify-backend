@@ -9,6 +9,7 @@ from app.db.base import get_db
 from app.db.models import User, Venue, Event
 from app.models.schemas import (
     Event as EventSchema,
+    EventWithVenue,
     FollowVenueResponse,
     InterestItem,
     NotificationFeed,
@@ -94,7 +95,7 @@ async def unsave_event(
     return SavedEventResponse(event_id=event_id, saved=False)
 
 
-@router.get("/events/saved", response_model=List[EventSchema])
+@router.get("/events/saved", response_model=List[EventWithVenue])
 async def get_saved_events(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
