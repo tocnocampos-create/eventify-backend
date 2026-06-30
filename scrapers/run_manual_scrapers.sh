@@ -39,6 +39,13 @@ python scrapers/fever_scraper.py || echo "[!] fever_scraper.py exited with error
 
 echo ""
 echo "████████████████████████████████████████████████████████████"
+echo "  PASSLINE SCRAPER"
+echo "████████████████████████████████████████████████████████████"
+echo ""
+python scrapers/passline_scraper.py || echo "[!] passline_scraper.py exited with error $?"
+
+echo ""
+echo "████████████████████████████████████████████████████████████"
 echo "  DONE"
 echo "████████████████████████████████████████████████████████████"
 echo ""
