@@ -628,6 +628,14 @@ class PasslineScraper(BaseScraper):
             time.sleep(REQUEST_DELAY)
 
         logger.info("[passline] Total events collected: %d", len(all_events))
+
+        if not all_events and not self.max_events:
+            raise RuntimeError(
+                "[passline] Returned 0 events on a full run — "
+                "likely a Cloudflare block on the Railway egress IP. "
+                "Check the warmup GET response and __cf_bm cookie."
+            )
+
         return all_events
 
     # ── Debug helper ──────────────────────────────────────────────────────────
