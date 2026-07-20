@@ -360,7 +360,7 @@ class PasslineScraper(BaseScraper):
             resp = self.session.post(API_URL, json=body, timeout=30)
             resp.raise_for_status()
             data = resp.json()
-        except _cf_requests.RequestException as exc:
+        except Exception as exc:
             logger.error("[passline] POST failed (offset=%d): %s", offset, exc)
             return []
         except ValueError as exc:
