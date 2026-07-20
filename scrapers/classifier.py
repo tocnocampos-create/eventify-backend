@@ -416,7 +416,7 @@ _CINE_VENUE_TYPES: frozenset[str] = frozenset(["cine", "cineteca"])
 # The scrapers don't forward venue_type into the event dict at classification
 # time, so the VENUE_TYPE_RULES hard signal never fires and the Música
 # last-resort fallback wins. Source prefix is the only reliable signal.
-_CINEMA_SOURCES: frozenset[str] = frozenset(["cinemark", "cineplanet", "cinepolis"])
+_CINEMA_SOURCES: frozenset[str] = frozenset(["cinemark", "cineplanet", "cinepolis", "biografo", "cineteca"])
 
 # Keywords that unambiguously indicate cinema content even at non-Cine venues
 _STRONG_CINE_KEYWORDS: frozenset[str] = frozenset([
@@ -529,9 +529,15 @@ def classify(event: dict[str, Any]) -> dict[str, Any]:
     # These scrapers don't pass venue_type through the enricher pipeline at
     # classification time, so the venue_type hard-signal never fires and the
     # Música last-resort fallback incorrectly wins.
+    # Cineteca Nacional uses full HTTPS URLs as source_url (deduplication key),
+    # so we match by domain instead of prefix.
+    _CINETECA_DOMAINS: frozenset[str] = frozenset(["cinetecanacional.gob.cl"])
     if source_url:
         _src_prefix = source_url.split(":")[0].lower()
-        if _src_prefix in _CINEMA_SOURCES:
+        _is_cinema_source = _src_prefix in _CINEMA_SOURCES or any(
+            d in source_url for d in _CINETECA_DOMAINS
+        )
+        if _is_cinema_source:
             event["category"] = "Cine"
             event["type"] = "Cine"
             event["keywords"] = sorted(KEYWORD_RULES.get("Cine", []))
