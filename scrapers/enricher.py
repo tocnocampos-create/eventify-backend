@@ -84,6 +84,18 @@ VENUE_NAME_OVERRIDES: dict[str, str] = {
     # force all variants to the museum so events never land on the park.
     "parque forestal":         "MAC – Parque Forestal",
     "mac parque forestal":     "MAC – Parque Forestal",
+    # Teatro Imagen Gustavo Meza — Passline uses the full director name; DB row
+    # is "Sala Imagen-GustavoMeza".  Prefix-strip removes "teatro " but leaves
+    # "imagen gustavo meza" which fails substring match against "sala imagen-gustavomeza".
+    "teatro imagen gustavo meza": "Sala Imagen-GustavoMeza",
+    "sala imagen gustavo meza":   "Sala Imagen-GustavoMeza",
+    "imagen gustavo meza":        "Sala Imagen-GustavoMeza",
+    # Tom House Bar — Passline title-cases differently; DB has "Tom House Cruising Bar".
+    "tom house bar":              "Tom House Cruising Bar",
+    # El Mesón Nerudiano — Portaldisc slugs embed the venue in the event URL.
+    "el mesón nerudiano":         "El Mesón Nerudiano",
+    "mesón nerudiano":            "El Mesón Nerudiano",
+    "meson nerudiano":            "El Mesón Nerudiano",
 }
 
 # ── Source-aware venue overrides ──────────────────────────────────────────────
